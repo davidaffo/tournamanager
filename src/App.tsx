@@ -626,6 +626,31 @@ export default function App() {
     setEditingMatch(null)
     setPoolFilter('all')
   }
+  const removeTournament = (id: string) => {
+    if (managerState.tournaments.length <= 1) return
+    const target = managerState.tournaments.find((tournament) => tournament.id === id)
+    if (!target) return
+    if ((target.state.teams.length > 0 || target.state.matches.length > 0) && !window.confirm(`Rimuovere “${target.label}”? Squadre, formula e risultati di questo torneo verranno eliminati.`)) return
+    setManagerState((current) => {
+      const tournaments = current.tournaments.filter((tournament) => tournament.id !== id)
+      return {
+        tournaments,
+        activeId: current.activeId === id ? tournaments[0].id : current.activeId,
+      }
+    })
+    setTeamTexts((current) => {
+      const next = { ...current }
+      delete next[id]
+      return next
+    })
+    setTeamErrors((current) => {
+      const next = { ...current }
+      delete next[id]
+      return next
+    })
+    setEditingMatch(null)
+    setPoolFilter('all')
+  }
 
   const header = <header className="topbar">
     <div><div className="eyebrow">Torneo</div><h1>{config.name}</h1></div>
@@ -654,7 +679,7 @@ export default function App() {
     </aside>
 
     <main>{header}
-      <div className="tournament-bar"><span>Tornei paralleli</span><div>{managerState.tournaments.map((tournament, index) => <article className={tournament.id === activeWorkspace.id ? 'active' : ''} key={tournament.id}><button onClick={() => selectTournament(tournament.id)}><i />{tournament.label || `Torneo ${index + 1}`}<small>{tournament.state.matches.filter((match) => match.status === 'playing').length ? 'live' : `${tournament.state.teams.length} squadre`}</small></button></article>)}</div><small>{managerState.tournaments.length} simultane{managerState.tournaments.length === 1 ? 'o' : 'i'}</small></div>
+      <div className="tournament-bar"><span>Tornei paralleli</span><div>{managerState.tournaments.map((tournament, index) => <article className={tournament.id === activeWorkspace.id ? 'active' : ''} key={tournament.id}><button onClick={() => selectTournament(tournament.id)}><i />{tournament.label || `Torneo ${index + 1}`}<small>{tournament.state.matches.filter((match) => match.status === 'playing').length ? 'live' : `${tournament.state.teams.length} squadre`}</small></button>{managerState.tournaments.length > 1 && <button className="remove-tournament" aria-label={`Rimuovi ${tournament.label || `Torneo ${index + 1}`}`} title="Rimuovi torneo" onClick={() => removeTournament(tournament.id)}><Trash2 size={14} /></button>}</article>)}{managerState.tournaments.length < 3 && <button className="add-tournament" onClick={() => setTournamentCount(managerState.tournaments.length + 1)}><Plus size={14} /> Aggiungi torneo</button>}</div><small>{managerState.tournaments.length} simultane{managerState.tournaments.length === 1 ? 'o' : 'i'}</small></div>
       {view === 'design' && <div className="page design-page">
         <section className="hero">
           <div><span className="pill">Configurazione</span><h2>Configura il torneo</h2><p>Imposta squadre, orari, campi e numero di partite.</p></div>
