@@ -5,6 +5,7 @@ export type Team = {
   id: string
   name: string
   seed: number
+  club: string
 }
 
 export type TournamentConfig = {
@@ -16,6 +17,8 @@ export type TournamentConfig = {
   tournamentType: TournamentType
   setsPerMatch: number
   pointsPerSet: number
+  setPoints: number[]
+  winByTwo: boolean
   phaseBreakMinutes: number
   groupCount: number
   finalTeams: number
@@ -34,25 +37,6 @@ export type TournamentPhase = {
   advanceAll: boolean
   advancingTeams: number
   thirdPlaceFinal: boolean
-}
-
-export type FormatSuggestion = {
-  id: FormatKind
-  name: string
-  kicker: string
-  description: string
-  totalMatches: number
-  gamesMin: number
-  gamesAverage: number
-  gamesMax: number
-  estimatedEnd: string
-  utilization: number
-  feasible: boolean
-  score: number
-  recommended: boolean
-  groupCount?: number
-  finalTeams?: number
-  phases: TournamentPhase[]
 }
 
 export type MatchStatus = 'scheduled' | 'playing' | 'completed'

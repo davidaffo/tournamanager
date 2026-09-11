@@ -6,13 +6,14 @@ con un preset operativo pensato per la pallavolo.
 ## Funzioni incluse nell'MVP
 
 - importazione delle squadre tramite copia-incolla;
-- configurazione del numero di gironi e delle squadre qualificate;
+- editor completo delle fasi, con gironi per livello o incrociati e qualificazione automatica o configurabile;
 - gironi all’italiana ed eliminazione diretta;
 - tornei S3 e 6 contro 6, con stime temporali specifiche per il ritmo di gioco;
-- stima della durata in base a set e punti, con pausa configurabile tra le fasi;
+- stima della durata in base al punteggio di ogni set, ai campi condivisi e alla pausa configurabile tra le fasi;
+- gestione coordinata di fino a tre sotto-tornei sugli stessi campi;
 - generazione degli incontri dei gironi e del tabellone a eliminazione diretta;
 - assegnazione automatica a campi e orari;
-- regia live con avvio e conclusione delle gare;
+- regia live unificata, con blocco delle sovrapposizioni sui campi;
 - risultati per set e classifiche con punti, quoziente set e punti;
 - salvataggio automatico nel browser;
 - 24 squadre dimostrative caricate soltanto in modalità sviluppo.
