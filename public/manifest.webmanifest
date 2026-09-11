@@ -1,0 +1,9 @@
+{
+  "name": "TorunaManager",
+  "short_name": "TorunaManager",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f3f1e8",
+  "theme_color": "#111d1a",
+  "icons": [{ "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }]
+}
