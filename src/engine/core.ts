@@ -18,6 +18,18 @@ export const tournamentEndMinute = (startTime: string, endTime: string) => {
   return end <= start ? end + 1440 : end
 }
 
+export const isPowerOfTwo = (value: number) => Number.isInteger(value) && value >= 2 && (value & (value - 1)) === 0
+
+export const knockoutSizesUpTo = (teamCount: number) => {
+  const sizes: number[] = []
+  for (let size = 2; size <= teamCount; size *= 2) sizes.push(size)
+  return sizes
+}
+
+export const knockoutTeamCountsUpTo = (teamCount: number, bracketCount: number) => knockoutSizesUpTo(Math.floor(teamCount / Math.max(1, bracketCount))).map((size) => size * Math.max(1, bracketCount))
+
+export const isBalancedKnockout = (teamCount: number, bracketCount: number) => Number.isInteger(bracketCount) && bracketCount >= 1 && teamCount % bracketCount === 0 && isPowerOfTwo(teamCount / bracketCount)
+
 export function alphabeticalLabel(index: number) {
   let value = Math.max(0, Math.floor(index)) + 1
   let label = ''
@@ -32,7 +44,12 @@ export function alphabeticalLabel(index: number) {
 export const estimateMatchMinutes = (config: TournamentConfig) => {
   const sets = Math.max(1, config.setsPerMatch ?? 2)
   const targets = Array.from({ length: sets }, (_, index) => Math.max(1, config.setPoints?.[index] ?? config.pointsPerSet ?? 21))
-  const minutesPerPoint = config.tournamentType === 's3' ? 0.65 : 1
+  const minutesPerPoint = {
+    's3-red': 0.55,
+    's3-green': 0.65,
+    's3-white': 0.85,
+    '6v6': 1,
+  }[config.tournamentType] ?? 0.65
   const advantageFactor = config.winByTwo ? 1.08 : 1
   return Math.ceil(targets.reduce((sum, points) => sum + points * minutesPerPoint * advantageFactor, 0) + Math.max(0, sets - 1) * 3)
 }
@@ -123,8 +140,7 @@ function splitTeamsByClub(teams: Team[], count: number): Team[][] {
 
 function splitTieredSources(items: string[], count: number): string[][] {
   const parsed = items.map((source, index) => ({ source, index, rank: rankedSourceData(source)?.rank ?? 0 }))
-  if (parsed.some((item) => !item.rank)) return splitBalanced(items, count)
-  const ordered = parsed.sort((a, b) => a.rank - b.rank || a.index - b.index).map((item) => item.source)
+  const ordered = (parsed.some((item) => !item.rank) ? parsed : parsed.sort((a, b) => a.rank - b.rank || a.index - b.index)).map((item) => item.source)
   const baseSize = Math.floor(ordered.length / count)
   const largerGroups = ordered.length % count
   let offset = 0
@@ -144,7 +160,13 @@ function splitCrossedSources(items: string[], count: number): string[][] {
   parsed.forEach(({ source, index, rank }) => rankBands.set(rank, [...(rankBands.get(rank) ?? []), { source, index }]))
   const groups = Array.from({ length: count }, () => [] as string[])
   ;[...rankBands.entries()].sort(([rankA], [rankB]) => rankA - rankB).forEach(([, band], bandIndex) => {
-    band.sort((a, b) => a.index - b.index).forEach(({ source }, sourceIndex) => groups[(sourceIndex + bandIndex) % count].push(source))
+    band.sort((a, b) => a.index - b.index).forEach(({ source }, sourceIndex) => {
+      const smallestSize = Math.min(...groups.map((group) => group.length))
+      const preferredStart = (sourceIndex + bandIndex) % count
+      const targetIndex = Array.from({ length: count }, (_, offset) => (preferredStart + offset) % count)
+        .find((groupIndex) => groups[groupIndex].length === smallestSize) as number
+      groups[targetIndex].push(source)
+    })
   })
   return groups
 }
@@ -153,7 +175,7 @@ type DraftMatch = Omit<Match, 'court' | 'startMinute' | 'endMinute' | 'status' |
 
 function generateDrafts(teams: Team[], config: TournamentConfig, kind: FormatKind, phases?: TournamentPhase[]): DraftMatch[] {
   let sequence = 0
-  const appendBracket = (drafts: DraftMatch[], orderedSources: string[], firstRound: number, phaseId: string, thirdPlaceFinal = config.thirdPlaceFinal, phaseLabel = 'Eliminazione diretta') => {
+  const appendBracket = (drafts: DraftMatch[], orderedSources: string[], firstRound: number, phaseId: string, thirdPlaceFinal = config.thirdPlaceFinal, phaseLabel = 'Eliminazione diretta', tierLabel?: string) => {
     const bracketSize = 2 ** Math.ceil(Math.log2(orderedSources.length))
     let seedOrder = [1, 2]
     while (seedOrder.length < bracketSize) {
@@ -211,7 +233,7 @@ function generateDrafts(teams: Team[], config: TournamentConfig, kind: FormatKin
           continue
         }
         const id = `match-${++sequence}`
-        drafts.push({ id, phaseId, phaseName: sources.length === 2 ? 'Finale' : sources.length === 4 ? 'Semifinale' : round === firstRound && orderedSources.length < bracketSize ? `${phaseLabel} · Turno preliminare` : phaseLabel, round, teamAId, teamBId })
+        drafts.push({ id, phaseId, phaseName: sources.length === 2 ? (tierLabel ? `${tierLabel} · Finale` : 'Finale') : sources.length === 4 ? (tierLabel ? `${tierLabel} · Semifinale` : 'Semifinale') : round === firstRound && orderedSources.length < bracketSize ? `${tierLabel ?? phaseLabel} · Turno preliminare` : tierLabel ?? phaseLabel, round, teamAId, teamBId })
         next.push(`winner:${id}`)
         roundIds.push(id)
       }
@@ -220,7 +242,7 @@ function generateDrafts(teams: Team[], config: TournamentConfig, kind: FormatKin
       round += 1
     }
     if (thirdPlaceFinal && semifinalIds.length === 2) {
-      drafts.push({ id: `match-${++sequence}`, phaseId, phaseName: 'Finale 3° posto', round: round - 1, teamAId: `loser:${semifinalIds[0]}`, teamBId: `loser:${semifinalIds[1]}` })
+      drafts.push({ id: `match-${++sequence}`, phaseId, phaseName: tierLabel ? `${tierLabel} · Finale 3° posto` : 'Finale 3° posto', round: round - 1, teamAId: `loser:${semifinalIds[0]}`, teamBId: `loser:${semifinalIds[1]}` })
     }
   }
 
@@ -231,9 +253,10 @@ function generateDrafts(teams: Team[], config: TournamentConfig, kind: FormatKin
     phases.forEach((phase, phaseIndex) => {
       if (phase.format === 'groups') {
         const groupCount = Math.min(sources.length, Math.max(1, phase.groupCount))
+        const isFinalGroupStage = phaseIndex === phases.length - 1
         const groups = phaseIndex === 0
           ? splitTeamsByClub(teams, groupCount).map((group) => group.map((team) => team.id))
-          : phase.groupComposition === 'cross'
+          : !isFinalGroupStage && phase.groupComposition === 'cross'
             ? splitCrossedSources(sources, groupCount)
             : splitTieredSources(sources, groupCount)
         let phaseRounds = 0
@@ -263,7 +286,18 @@ function generateDrafts(teams: Team[], config: TournamentConfig, kind: FormatKin
         }
         firstRound += phaseRounds
       } else {
-        appendBracket(drafts, sources, firstRound, phase.id, phase.thirdPlaceFinal, phase.name)
+        const bracketCount = Math.min(Math.floor(sources.length / 2), Math.max(1, phase.groupCount))
+        const brackets = splitTieredSources(sources, bracketCount)
+        const phaseDrafts: DraftMatch[] = []
+        let placementStart = 1
+        brackets.forEach((bracket, bracketIndex) => {
+          const placementEnd = placementStart + bracket.length - 1
+          const tierLabel = bracketCount === 1 ? undefined : `Finali ${placementStart}°–${placementEnd}° posto`
+          appendBracket(phaseDrafts, bracket, firstRound, phase.id, phase.thirdPlaceFinal, phase.name, tierLabel)
+          placementStart = placementEnd + 1
+        })
+        phaseDrafts.sort((a, b) => a.round - b.round)
+        drafts.push(...phaseDrafts)
       }
     })
     return drafts
@@ -305,37 +339,55 @@ export function generateParallelMatches(entries: Array<{ id: string; teams: Team
     const courtReady = Array.from({ length: courtCount }, () => phaseStart)
     const teamReady = new Map<string, number>()
     const matchReady = new Map<string, number>()
-    const queues = entries.map((entry) => ({
-      entry,
-      matches: (drafts.get(entry.id) ?? []).filter((draft) => draft.phaseId === entry.phases[phaseIndex]?.id),
-    }))
-    let pending = true
-    while (pending) {
-      pending = false
-      queues.forEach(({ entry, matches }) => {
-        const draft = matches.shift()
-        if (!draft) return
-        pending = true
-        const duration = estimateMatchMinutes(entry.config)
+    const pending = entries.flatMap((entry, entryIndex) => (drafts.get(entry.id) ?? [])
+      .filter((draft) => draft.phaseId === entry.phases[phaseIndex]?.id)
+      .map((draft, draftIndex) => ({ entry, entryIndex, draft, draftIndex })))
+    const teamGames = new Map<string, number>()
+    const poolGames = new Map<string, number>()
+    const tournamentGames = new Map<string, number>()
+    while (pending.length) {
+      const candidates = pending.flatMap((item, pendingIndex) => {
+        const { entry, draft } = item
+        const dependency = (source: string) => source.match(/^(?:winner|loser):(.+)$/)?.[1]
+        const dependencies = [dependency(draft.teamAId), dependency(draft.teamBId)].filter((value): value is string => Boolean(value))
+        if (dependencies.some((id) => !matchReady.has(`${entry.id}:${id}`))) return []
         const readyFor = (source: string) => {
-          const dependency = source.match(/^(?:winner|loser):(.+)$/)?.[1]
-          if (dependency) return matchReady.get(`${entry.id}:${dependency}`) ?? phaseStart
-          if (source.startsWith('rank:pool-') || source.startsWith('best:phase-')) return phaseStart
+          const requiredMatch = dependency(source)
+          if (requiredMatch) return matchReady.get(`${entry.id}:${requiredMatch}`) as number
           return teamReady.get(`${entry.id}:${source}`) ?? phaseStart
         }
-        let bestCourt = 0
-        let bestStart = Number.POSITIVE_INFINITY
-        for (let court = 0; court < courtCount; court += 1) {
-          const candidate = Math.max(courtReady[court], readyFor(draft.teamAId), readyFor(draft.teamBId))
-          if (candidate < bestStart) { bestStart = candidate; bestCourt = court }
+        let court = 0
+        let startMinute = Number.POSITIVE_INFINITY
+        for (let candidateCourt = 0; candidateCourt < courtCount; candidateCourt += 1) {
+          const candidateStart = Math.max(courtReady[candidateCourt], readyFor(draft.teamAId), readyFor(draft.teamBId))
+          if (candidateStart < startMinute) { startMinute = candidateStart; court = candidateCourt }
         }
-        const endMinute = bestStart + duration
-        courtReady[bestCourt] = endMinute
-        teamReady.set(`${entry.id}:${draft.teamAId}`, endMinute)
-        teamReady.set(`${entry.id}:${draft.teamBId}`, endMinute)
-        matchReady.set(`${entry.id}:${draft.id}`, endMinute)
-        result[entry.id].push({ ...draft, court: bestCourt + 1, startMinute: bestStart, endMinute, status: 'scheduled', sets: [] })
+        const teamGameCount = (teamGames.get(`${entry.id}:${draft.teamAId}`) ?? 0) + (teamGames.get(`${entry.id}:${draft.teamBId}`) ?? 0)
+        const waitingSince = readyFor(draft.teamAId) + readyFor(draft.teamBId)
+        return [{ ...item, pendingIndex, court, startMinute, teamGameCount, waitingSince }]
       })
+      if (!candidates.length) break
+      candidates.sort((a, b) => a.startMinute - b.startMinute
+        || a.teamGameCount - b.teamGameCount
+        || a.waitingSince - b.waitingSince
+        || (poolGames.get(`${a.entry.id}:${a.draft.pool ?? a.draft.phaseName}`) ?? 0) - (poolGames.get(`${b.entry.id}:${b.draft.pool ?? b.draft.phaseName}`) ?? 0)
+        || (tournamentGames.get(a.entry.id) ?? 0) - (tournamentGames.get(b.entry.id) ?? 0)
+        || a.draft.round - b.draft.round
+        || a.entryIndex - b.entryIndex
+        || a.draftIndex - b.draftIndex)
+      const selected = candidates[0]
+      const { entry, draft } = selected
+      const endMinute = selected.startMinute + estimateMatchMinutes(entry.config)
+      courtReady[selected.court] = endMinute
+      teamReady.set(`${entry.id}:${draft.teamAId}`, endMinute)
+      teamReady.set(`${entry.id}:${draft.teamBId}`, endMinute)
+      teamGames.set(`${entry.id}:${draft.teamAId}`, (teamGames.get(`${entry.id}:${draft.teamAId}`) ?? 0) + 1)
+      teamGames.set(`${entry.id}:${draft.teamBId}`, (teamGames.get(`${entry.id}:${draft.teamBId}`) ?? 0) + 1)
+      poolGames.set(`${entry.id}:${draft.pool ?? draft.phaseName}`, (poolGames.get(`${entry.id}:${draft.pool ?? draft.phaseName}`) ?? 0) + 1)
+      tournamentGames.set(entry.id, (tournamentGames.get(entry.id) ?? 0) + 1)
+      matchReady.set(`${entry.id}:${draft.id}`, endMinute)
+      result[entry.id].push({ ...draft, court: selected.court + 1, startMinute: selected.startMinute, endMinute, status: 'scheduled', sets: [] })
+      pending.splice(selected.pendingIndex, 1)
     }
     const phaseEnd = Math.max(...courtReady, phaseStart)
     phaseStart = phaseEnd + (phaseIndex < phaseCount - 1 ? Math.max(0, entries[0].config.phaseBreakMinutes) : 0)
@@ -346,7 +398,6 @@ export function generateParallelMatches(entries: Array<{ id: string; teams: Team
 export function generateMatches(teams: Team[], config: TournamentConfig, kind: FormatKind, phases?: TournamentPhase[], occupiedMatches: Match[] = []): Match[] {
   const drafts = generateDrafts(teams, config, kind, phases)
   const matchMinutes = estimateMatchMinutes(config)
-  const slot = matchMinutes
   const start = toMinute(config.startTime)
   const courtReady = Array.from({ length: config.courts }, () => start)
   const occupiedByCourt = Array.from({ length: config.courts }, (_, court) => occupiedMatches
@@ -354,7 +405,7 @@ export function generateMatches(teams: Team[], config: TournamentConfig, kind: F
     .sort((a, b) => a.startMinute - b.startMinute))
   const matchReady = new Map<string, number>()
   const participantReadyAt = new Map<string, number>()
-  let activePhaseId: string | undefined
+  const scheduled: Match[] = []
   const participantReady = (source: string) => {
     const dependency = source.match(/^(?:winner|loser):(.+)$/)?.[1]
     if (dependency) return matchReady.get(dependency) ?? start
@@ -369,29 +420,53 @@ export function generateMatches(teams: Team[], config: TournamentConfig, kind: F
     return candidate
   }
 
-  return drafts.map((draft) => {
-    if (phases?.length && activePhaseId && activePhaseId !== draft.phaseId) {
+  const phaseIds: Array<string | undefined> = phases?.length ? [...new Set(drafts.map((draft) => draft.phaseId))] : [undefined]
+  phaseIds.forEach((phaseId, phaseIndex) => {
+    if (phases?.length && phaseIndex > 0) {
       const nextPhaseStart = Math.max(...courtReady) + Math.max(0, config.phaseBreakMinutes ?? 0)
       courtReady.fill(nextPhaseStart)
     }
-    activePhaseId = draft.phaseId
-    let bestCourt = 0
-    let bestStart = Number.POSITIVE_INFINITY
-    for (let court = 0; court < config.courts; court += 1) {
-      const requestedStart = Math.max(courtReady[court], participantReady(draft.teamAId), participantReady(draft.teamBId))
-      const candidate = nextFreeStart(court, requestedStart)
-      if (candidate < bestStart) {
-        bestStart = candidate
-        bestCourt = court
-      }
+    const pending = drafts.map((draft, draftIndex) => ({ draft, draftIndex })).filter(({ draft }) => phaseId === undefined || draft.phaseId === phaseId)
+    const teamGames = new Map<string, number>()
+    const poolGames = new Map<string, number>()
+    while (pending.length) {
+      const candidates = pending.flatMap(({ draft, draftIndex }, pendingIndex) => {
+        const dependency = (source: string) => source.match(/^(?:winner|loser):(.+)$/)?.[1]
+        const dependencies = [dependency(draft.teamAId), dependency(draft.teamBId)].filter((value): value is string => Boolean(value))
+        if (dependencies.some((id) => !matchReady.has(id))) return []
+        let court = 0
+        let startMinute = Number.POSITIVE_INFINITY
+        for (let candidateCourt = 0; candidateCourt < config.courts; candidateCourt += 1) {
+          const requestedStart = Math.max(courtReady[candidateCourt], participantReady(draft.teamAId), participantReady(draft.teamBId))
+          const candidateStart = nextFreeStart(candidateCourt, requestedStart)
+          if (candidateStart < startMinute) { startMinute = candidateStart; court = candidateCourt }
+        }
+        const teamGameCount = (teamGames.get(draft.teamAId) ?? 0) + (teamGames.get(draft.teamBId) ?? 0)
+        const waitingSince = participantReady(draft.teamAId) + participantReady(draft.teamBId)
+        return [{ draft, draftIndex, pendingIndex, court, startMinute, teamGameCount, waitingSince }]
+      })
+      if (!candidates.length) break
+      candidates.sort((a, b) => a.startMinute - b.startMinute
+        || a.teamGameCount - b.teamGameCount
+        || a.waitingSince - b.waitingSince
+        || (poolGames.get(a.draft.pool ?? a.draft.phaseName) ?? 0) - (poolGames.get(b.draft.pool ?? b.draft.phaseName) ?? 0)
+        || a.draft.round - b.draft.round
+        || a.draftIndex - b.draftIndex)
+      const selected = candidates[0]
+      const { draft } = selected
+      const endMinute = selected.startMinute + matchMinutes
+      courtReady[selected.court] = endMinute
+      matchReady.set(draft.id, endMinute)
+      participantReadyAt.set(draft.teamAId, endMinute)
+      participantReadyAt.set(draft.teamBId, endMinute)
+      teamGames.set(draft.teamAId, (teamGames.get(draft.teamAId) ?? 0) + 1)
+      teamGames.set(draft.teamBId, (teamGames.get(draft.teamBId) ?? 0) + 1)
+      poolGames.set(draft.pool ?? draft.phaseName, (poolGames.get(draft.pool ?? draft.phaseName) ?? 0) + 1)
+      scheduled.push({ ...draft, court: selected.court + 1, startMinute: selected.startMinute, endMinute, status: 'scheduled', sets: [] })
+      pending.splice(selected.pendingIndex, 1)
     }
-    const endMinute = bestStart + matchMinutes
-    courtReady[bestCourt] = bestStart + slot
-    matchReady.set(draft.id, endMinute)
-    participantReadyAt.set(draft.teamAId, endMinute)
-    participantReadyAt.set(draft.teamBId, endMinute)
-    return { ...draft, court: bestCourt + 1, startMinute: bestStart, endMinute, status: 'scheduled', sets: [] }
   })
+  return scheduled
 }
 
 function ratio(won: number, lost: number) {
@@ -553,13 +628,6 @@ export function canStartOnSharedCourts(
   const teamA = resolveParticipantId(match.teamAId, matches)
   const teamB = resolveParticipantId(match.teamBId, matches)
   if (!teamA || !teamB) return false
-  const hasEarlierPendingMatch = matches.some((other) => {
-    if (other.id === match.id || other.status === 'completed' || other.startMinute >= match.startMinute) return false
-    const otherA = resolveParticipantId(other.teamAId, matches)
-    const otherB = resolveParticipantId(other.teamBId, matches)
-    return otherA === teamA || otherA === teamB || otherB === teamA || otherB === teamB
-  })
-  if (hasEarlierPendingMatch) return false
   return !playing.some((active) => {
     if (active.match.court === match.court) return true
     if (active.tournamentId !== tournamentId) return false

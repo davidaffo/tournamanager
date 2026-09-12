@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { alphabeticalLabel, calculateStandings, canStartOnSharedCourts, dependentMatchIds, estimateMatchMinutes, formatMinute, generateMatches, generateParallelMatches, getKnockoutWinner, isValidSetScore, parseTeams, resolveMatchesForStandings, resolveParticipantId, tournamentEndMinute } from './core'
+import { alphabeticalLabel, calculateStandings, canStartOnSharedCourts, dependentMatchIds, estimateMatchMinutes, formatMinute, generateMatches, generateParallelMatches, getKnockoutWinner, isBalancedKnockout, isPowerOfTwo, isValidSetScore, knockoutSizesUpTo, knockoutTeamCountsUpTo, parseTeams, resolveMatchesForStandings, resolveParticipantId, tournamentEndMinute } from './core'
 import type { TournamentConfig } from './types'
 
 const config: TournamentConfig = {
   name: 'Test', date: '2026-09-10', startTime: '09:00', endTime: '19:00', courts: 3,
-  tournamentType: 's3',
+  tournamentType: 's3-green',
   setsPerMatch: 2, pointsPerSet: 21, setPoints: [21, 21], winByTwo: false, phaseBreakMinutes: 15,
   groupCount: 2, finalTeams: 8, thirdPlaceFinal: true,
 }
@@ -32,10 +32,21 @@ describe('tournament engine', () => {
 
   it('estimates match duration from sets and target points', () => {
     expect(estimateMatchMinutes(config)).toBe(31)
+    expect(estimateMatchMinutes({ ...config, tournamentType: 's3-red' })).toBe(27)
+    expect(estimateMatchMinutes({ ...config, tournamentType: 's3-white' })).toBe(39)
     expect(estimateMatchMinutes({ ...config, tournamentType: '6v6' })).toBe(45)
     expect(estimateMatchMinutes({ ...config, setsPerMatch: 3, pointsPerSet: 15, setPoints: [15, 15, 15] })).toBe(36)
     expect(estimateMatchMinutes({ ...config, setsPerMatch: 3, setPoints: [21, 21, 15] })).toBe(44)
     expect(estimateMatchMinutes({ ...config, winByTwo: true })).toBeGreaterThan(estimateMatchMinutes(config))
+  })
+
+  it('recalculates the complete schedule when set count or points change', () => {
+    const teams = parseTeams(Array.from({ length: 12 }, (_, index) => `Team ${index + 1}`).join('\n'))
+    const phases = [{ id: 'p1', name: 'Gironi', format: 'groups' as const, groupCount: 3, groupComposition: 'strength' as const, advanceAll: true, advancingTeams: 12, thirdPlaceFinal: false }]
+    const finish = (tournamentConfig: TournamentConfig) => Math.max(...generateParallelMatches([{ id: 'a', teams, config: tournamentConfig, phases }]).a.map((match) => match.endMinute))
+    const shorter = finish({ ...config, setsPerMatch: 1, pointsPerSet: 15, setPoints: [15] })
+    const longer = finish({ ...config, setsPerMatch: 3, pointsPerSet: 21, setPoints: [21, 21, 21] })
+    expect(longer).toBeGreaterThan(shorter)
   })
 
   it('generates complete round-robin groups', () => {
@@ -45,12 +56,51 @@ describe('tournament engine', () => {
     teams.forEach((team) => expect(matches.filter((m) => m.teamAId === team.id || m.teamBId === team.id)).toHaveLength(3))
   })
 
+  it('rotates group teams so nobody gets a disproportionately long break', () => {
+    const teams = parseTeams(Array.from({ length: 8 }, (_, index) => `Team ${index + 1}`).join('\n'))
+    const phases = [{ id: 'p1', name: 'Gironi', format: 'groups' as const, groupCount: 2, groupComposition: 'strength' as const, advanceAll: true, advancingTeams: 8, thirdPlaceFinal: false }]
+    const matches = generateMatches(teams, { ...config, courts: 2 }, 'groups', phases)
+    const duration = estimateMatchMinutes(config)
+    const longestBreaks = teams.map((team) => {
+      const teamMatches = matches.filter((match) => match.teamAId === team.id || match.teamBId === team.id).sort((a, b) => a.startMinute - b.startMinute)
+      const breaks = teamMatches.slice(1).map((match, index) => match.startMinute - teamMatches[index].endMinute)
+      return Math.max(...breaks)
+    })
+    const firstStarts = teams.map((team) => Math.min(...matches.filter((match) => match.teamAId === team.id || match.teamBId === team.id).map((match) => match.startMinute)))
+    expect(Math.max(...firstStarts) - Math.min(...firstStarts)).toBeLessThanOrEqual(duration)
+    expect(Math.max(...longestBreaks)).toBeLessThanOrEqual(duration * 2)
+    expect(Math.max(...longestBreaks) - Math.min(...longestBreaks)).toBeLessThanOrEqual(duration)
+  })
+
   it('generates a complete direct-elimination bracket', () => {
     const teams = parseTeams(Array.from({ length: 8 }, (_, i) => `Team ${i + 1}`).join('\n'))
     const matches = generateMatches(teams, config, 'knockout')
     expect(matches).toHaveLength(8)
     expect(matches.filter((match) => match.phaseName === 'Finale')).toHaveLength(1)
     expect(matches.filter((match) => match.phaseName === 'Finale 3° posto')).toHaveLength(1)
+  })
+
+  it('offers only complete knockout bracket sizes', () => {
+    expect(knockoutSizesUpTo(14)).toEqual([2, 4, 8])
+    expect(knockoutTeamCountsUpTo(14, 2)).toEqual([4, 8])
+    expect(isPowerOfTwo(8)).toBe(true)
+    expect(isPowerOfTwo(6)).toBe(false)
+    expect(isBalancedKnockout(8, 2)).toBe(true)
+    expect(isBalancedKnockout(10, 2)).toBe(false)
+  })
+
+  it('creates simultaneous knockout brackets for separate placement ranges', () => {
+    const teams = parseTeams(Array.from({ length: 8 }, (_, index) => `Team ${index + 1}`).join('\n'))
+    const phases = [
+      { id: 'p1', name: 'Gironi', format: 'groups' as const, groupCount: 2, groupComposition: 'strength' as const, advanceAll: true, advancingTeams: 8, thirdPlaceFinal: false },
+      { id: 'p2', name: 'Finali', format: 'knockout' as const, groupCount: 2, groupComposition: 'strength' as const, advanceAll: false, advancingTeams: 1, thirdPlaceFinal: false },
+    ]
+    const finals = generateMatches(teams, { ...config, courts: 4 }, 'groups', phases).filter((match) => match.phaseId === 'p2')
+    expect(finals).toHaveLength(6)
+    expect(finals.some((match) => match.phaseName.startsWith('Finali 1°–4° posto'))).toBe(true)
+    expect(finals.some((match) => match.phaseName.startsWith('Finali 5°–8° posto'))).toBe(true)
+    const firstRound = Math.min(...finals.map((match) => match.round))
+    expect(new Set(finals.filter((match) => match.round === firstRound).map((match) => match.startMinute))).toHaveLength(1)
   })
 
   it('seeds non-power-of-two brackets without making the top seeds play each other after their byes', () => {
@@ -262,14 +312,11 @@ describe('tournament engine', () => {
     expect(canStartOnSharedCourts('a', sameTeam, matches, playing)).toBe(false)
   })
 
-  it('does not call a later match before the same team has completed its earlier match', () => {
+  it('allows any scheduled group match when its teams and court are free', () => {
     const teams = parseTeams('A\nB\nC\nD\nE')
     const matches = generateMatches(teams, { ...config, courts: 8, groupCount: 1, finalTeams: 0 }, 'groups')
     const later = matches.find((match) => matches.some((earlier) => earlier.startMinute < match.startMinute && [earlier.teamAId, earlier.teamBId].some((id) => id === match.teamAId || id === match.teamBId)))!
-    expect(canStartOnSharedCourts('a', later, matches, [])).toBe(false)
-    const completedEarlier = matches.map((match) => match.startMinute < later.startMinute ? { ...match, status: 'completed' as const, sets: [{ a: 21, b: 10 }] } : match)
-    const updatedLater = completedEarlier.find((match) => match.id === later.id)!
-    expect(canStartOnSharedCourts('a', updatedLater, completedEarlier, [])).toBe(true)
+    expect(canStartOnSharedCourts('a', later, matches, [])).toBe(true)
   })
 
   it('synchronizes equal phase windows across parallel tournaments', () => {
@@ -324,6 +371,7 @@ describe('tournament engine', () => {
     const phases = [
       { id: 'p1', name: 'Prima fase', format: 'groups' as const, groupCount: 2, groupComposition: 'strength' as const, advanceAll: true, advancingTeams: 8, thirdPlaceFinal: false },
       { id: 'p2', name: 'Seconda fase', format: 'groups' as const, groupCount: 2, groupComposition: 'cross' as const, advanceAll: true, advancingTeams: 8, thirdPlaceFinal: false },
+      { id: 'p3', name: 'Gironi finali', format: 'groups' as const, groupCount: 2, groupComposition: 'strength' as const, advanceAll: true, advancingTeams: 8, thirdPlaceFinal: false },
     ]
     const matches = generateMatches(teams, config, 'groups', phases).map((match) => match.phaseId === 'p1' ? { ...match, status: 'completed' as const, sets: [{ a: 21, b: 15 }, { a: 21, b: 16 }] } : match)
     const secondPhase = matches.filter((match) => match.phaseId === 'p2')
@@ -331,17 +379,41 @@ describe('tournament engine', () => {
     expect(new Set(resolved.flatMap((match) => [match.teamAId, match.teamBId]))).toHaveLength(8)
   })
 
-  it('can cross strong and weak ranking bands in later group stages', () => {
+  it('can cross opposite ranking bands in intermediate group stages', () => {
     const teams = parseTeams(Array.from({ length: 8 }, (_, i) => `Team ${i + 1}`).join('\n'))
     const phases = [
       { id: 'p1', name: 'Prima fase', format: 'groups' as const, groupCount: 2, groupComposition: 'strength' as const, advanceAll: true, advancingTeams: 8, thirdPlaceFinal: false },
       { id: 'p2', name: 'Incroci', format: 'groups' as const, groupCount: 2, groupComposition: 'cross' as const, advanceAll: true, advancingTeams: 8, thirdPlaceFinal: false },
+      { id: 'p3', name: 'Gironi finali', format: 'groups' as const, groupCount: 2, groupComposition: 'strength' as const, advanceAll: true, advancingTeams: 8, thirdPlaceFinal: false },
     ]
     const secondPhase = generateMatches(teams, config, 'groups', phases).filter((match) => match.phaseId === 'p2')
     const groupA = new Set(secondPhase.filter((match) => match.pool === '2A').flatMap((match) => [match.teamAId, match.teamBId]))
     const groupB = new Set(secondPhase.filter((match) => match.pool === '2B').flatMap((match) => [match.teamAId, match.teamBId]))
     expect(groupA).toEqual(new Set(['rank:pool-1A:1', 'rank:pool-1B:2', 'rank:pool-1A:3', 'rank:pool-1B:4']))
     expect(groupB).toEqual(new Set(['rank:pool-1B:1', 'rank:pool-1A:2', 'rank:pool-1B:3', 'rank:pool-1A:4']))
+  })
+
+  it('keeps crossed groups perfectly even with uneven source pools', () => {
+    const teams = parseTeams(Array.from({ length: 8 }, (_, i) => `Team ${i + 1}`).join('\n'))
+    const phases = [
+      { id: 'p1', name: 'Prima fase', format: 'groups' as const, groupCount: 3, groupComposition: 'strength' as const, advanceAll: true, advancingTeams: 8, thirdPlaceFinal: false },
+      { id: 'p2', name: 'Incroci', format: 'groups' as const, groupCount: 4, groupComposition: 'cross' as const, advanceAll: true, advancingTeams: 8, thirdPlaceFinal: false },
+      { id: 'p3', name: 'Gironi finali', format: 'groups' as const, groupCount: 2, groupComposition: 'strength' as const, advanceAll: true, advancingTeams: 8, thirdPlaceFinal: false },
+    ]
+    const secondPhase = generateMatches(teams, config, 'groups', phases).filter((match) => match.phaseId === 'p2')
+    const sizes = ['2A', '2B', '2C', '2D'].map((pool) => new Set(secondPhase.filter((match) => match.pool === pool).flatMap((match) => [match.teamAId, match.teamBId])).size)
+    expect(sizes).toEqual([2, 2, 2, 2])
+  })
+
+  it('always groups teams by ranking band in a final group stage', () => {
+    const teams = parseTeams(Array.from({ length: 8 }, (_, i) => `Team ${i + 1}`).join('\n'))
+    const phases = [
+      { id: 'p1', name: 'Prima fase', format: 'groups' as const, groupCount: 2, groupComposition: 'strength' as const, advanceAll: true, advancingTeams: 8, thirdPlaceFinal: false },
+      { id: 'p2', name: 'Gironi finali', format: 'groups' as const, groupCount: 2, groupComposition: 'cross' as const, advanceAll: true, advancingTeams: 8, thirdPlaceFinal: false },
+    ]
+    const finalPhase = generateMatches(teams, config, 'groups', phases).filter((match) => match.phaseId === 'p2')
+    const firstPlacementGroup = new Set(finalPhase.filter((match) => match.pool === '2A').flatMap((match) => [match.teamAId, match.teamBId]))
+    expect(firstPlacementGroup).toEqual(new Set(['rank:pool-1A:1', 'rank:pool-1B:1', 'rank:pool-1A:2', 'rank:pool-1B:2']))
   })
 
   it('uses wins, table points and quotients for rankings', () => {

@@ -1,5 +1,5 @@
 export type SetScore = { a: number; b: number }
-export type TournamentType = 's3' | '6v6'
+export type TournamentType = 's3-red' | 's3-green' | 's3-white' | '6v6'
 
 export type Team = {
   id: string

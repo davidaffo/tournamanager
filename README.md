@@ -8,7 +8,7 @@ con un preset operativo pensato per la pallavolo.
 - importazione delle squadre tramite copia-incolla;
 - editor completo delle fasi, con gironi per livello o incrociati e qualificazione automatica o configurabile;
 - gironi all’italiana ed eliminazione diretta;
-- tornei S3 e 6 contro 6, con stime temporali specifiche per il ritmo di gioco;
+- tornei S3 Red, Green e White oppure 6 contro 6, con stime temporali specifiche per categoria e ritmo di gioco;
 - stima della durata in base al punteggio di ogni set, ai campi condivisi e alla pausa configurabile tra le fasi;
 - gestione coordinata di fino a tre sotto-tornei sugli stessi campi;
 - generazione degli incontri dei gironi e del tabellone a eliminazione diretta;
@@ -31,6 +31,25 @@ npm run dev
 npm test
 npm run build
 ```
+
+## Pubblicazione con GitHub Pages
+
+Genera il sito statico nella cartella `docs`:
+
+```bash
+npm run build:pages
+```
+
+Poi pubblica sul repository anche la cartella `docs`. Nelle impostazioni GitHub
+del repository apri **Settings → Pages** e configura:
+
+- **Source**: `Deploy from a branch`;
+- **Branch**: il branch pubblicato (normalmente `main`);
+- **Folder**: `/docs`.
+
+I percorsi degli asset sono relativi, quindi il sito funziona sia su un dominio
+GitHub Pages principale sia nel sottopercorso con il nome del repository. Il file
+`.nojekyll` viene incluso automaticamente nella build.
 
 ## Ripristino della sessione Codex
 
