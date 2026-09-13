@@ -27,6 +27,14 @@ export type TournamentConfig = {
 
 export type FormatKind = 'groups' | 'knockout'
 export type GroupComposition = 'strength' | 'cross'
+export type GroupScoringMode = 'sets' | 'result'
+
+export type GroupScoring = {
+  mode: GroupScoringMode
+  setWinPoints: number
+  winPoints: number
+  drawPoints: number
+}
 
 export type TournamentPhase = {
   id: string
@@ -35,6 +43,7 @@ export type TournamentPhase = {
   groupCount: number
   groupComposition: GroupComposition
   groupLegs?: 1 | 2
+  groupScoring?: GroupScoring
   advanceAll: boolean
   advancingTeams: number
   thirdPlaceFinal: boolean
@@ -55,12 +64,14 @@ export type Match = {
   endMinute: number
   status: MatchStatus
   sets: SetScore[]
+  groupScoring?: GroupScoring
 }
 
 export type Standing = {
   teamId: string
   played: number
   won: number
+  drawn: number
   lost: number
   tablePoints: number
   setsWon: number

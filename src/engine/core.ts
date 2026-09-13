@@ -1,4 +1,19 @@
-import type { FormatKind, Match, SetScore, Standing, Team, TournamentConfig, TournamentPhase } from './types'
+import type { FormatKind, GroupScoring, Match, SetScore, Standing, Team, TournamentConfig, TournamentPhase } from './types'
+
+export const defaultGroupScoring = (): GroupScoring => ({
+  mode: 'result', setWinPoints: 1, winPoints: 3, drawPoints: 1,
+})
+
+export function normalizeGroupScoring(scoring?: GroupScoring): GroupScoring {
+  const fallback = defaultGroupScoring()
+  const points = (value: number | undefined, defaultValue: number) => Number.isFinite(value) ? Math.max(0, Math.min(99, Math.round(value as number))) : defaultValue
+  return {
+    mode: scoring?.mode === 'sets' ? 'sets' : 'result',
+    setWinPoints: points(scoring?.setWinPoints, fallback.setWinPoints),
+    winPoints: points(scoring?.winPoints, fallback.winPoints),
+    drawPoints: points(scoring?.drawPoints, fallback.drawPoints),
+  }
+}
 
 export const toMinute = (time: string) => {
   const [hours, minutes] = time.split(':').map(Number)
@@ -270,7 +285,7 @@ function generateDrafts(teams: Team[], config: TournamentConfig, kind: FormatKin
           phaseRounds = Math.max(phaseRounds, rounds.length)
           rounds.forEach((pairings, round) => pairings.forEach(([teamAId, teamBId]) => drafts.push({
             id: `match-${++sequence}`, phaseId: phase.id, phaseName: `${phase.name} · Girone ${groupLabel}`, pool,
-            round: firstRound + round, teamAId, teamBId,
+            round: firstRound + round, teamAId, teamBId, groupScoring: normalizeGroupScoring(phase.groupScoring),
           })))
         })
         if (phaseIndex < phases.length - 1) {
@@ -311,7 +326,7 @@ function generateDrafts(teams: Team[], config: TournamentConfig, kind: FormatKin
     const drafts = groups.flatMap((group, groupIndex) => {
       const pool = alphabeticalLabel(groupIndex)
       return roundRobinRounds(group.map((team) => team.id)).flatMap((pairings, round) => pairings.map(([teamAId, teamBId]) => ({
-        id: `match-${++sequence}`, phaseId: `pool-${pool}`, phaseName: `Girone ${pool}`, pool, round: round + 1, teamAId, teamBId,
+        id: `match-${++sequence}`, phaseId: `pool-${pool}`, phaseName: `Girone ${pool}`, pool, round: round + 1, teamAId, teamBId, groupScoring: defaultGroupScoring(),
       })))
     })
     const finalCount = config.finalTeams <= teams.length && config.finalTeams % groups.length === 0 ? config.finalTeams : 0
@@ -521,7 +536,7 @@ export function resolveParticipantId(source: string, matches: Match[]): string |
     candidates.sort((a, b) => {
       const aPlayed = Math.max(1, a.row.played)
       const bPlayed = Math.max(1, b.row.played)
-      return b.row.won / bPlayed - a.row.won / aPlayed || b.row.tablePoints / bPlayed - a.row.tablePoints / aPlayed || b.row.setRatio - a.row.setRatio || b.row.pointRatio - a.row.pointRatio || a.pool.localeCompare(b.pool)
+      return b.row.tablePoints / bPlayed - a.row.tablePoints / aPlayed || b.row.setRatio - a.row.setRatio || b.row.pointRatio - a.row.pointRatio || a.pool.localeCompare(b.pool)
     })
     const bestPositions = [...new Set(matches.flatMap((match) => [match.teamAId, match.teamBId]).flatMap((candidateSource) => {
       const candidateReference = candidateSource.match(new RegExp(`^best:phase-${phasePrefix}:rank-${rank}:(\\d+)$`))
@@ -589,7 +604,7 @@ export function resolveMatchesForStandings(selectedMatches: Match[], allMatches:
 
 export function calculateStandings(teams: Team[], matches: Match[]): Standing[] {
   const rows = new Map(teams.map((team) => [team.id, {
-    teamId: team.id, played: 0, won: 0, lost: 0, tablePoints: 0, setsWon: 0, setsLost: 0,
+    teamId: team.id, played: 0, won: 0, drawn: 0, lost: 0, tablePoints: 0, setsWon: 0, setsLost: 0,
     pointsFor: 0, pointsAgainst: 0, setRatio: 0, pointRatio: 0,
   }]))
   matches.filter((match) => match.status === 'completed').forEach((match) => {
@@ -604,21 +619,29 @@ export function calculateStandings(teams: Team[], matches: Match[]): Standing[] 
       a.pointsFor += set.a; a.pointsAgainst += set.b
       b.pointsFor += set.b; b.pointsAgainst += set.a
     })
+    const scoring = normalizeGroupScoring(match.groupScoring)
+    if (scoring.mode === 'sets') {
+      a.tablePoints += result.a * scoring.setWinPoints
+      b.tablePoints += result.b * scoring.setWinPoints
+    }
     if (!result.winner) {
-      a.tablePoints += 1
-      b.tablePoints += 1
+      a.drawn += 1; b.drawn += 1
+      if (scoring.mode === 'result') {
+        a.tablePoints += scoring.drawPoints
+        b.tablePoints += scoring.drawPoints
+      }
       return
     }
     const winner = result.winner === 'a' ? a : b
     const loser = result.winner === 'a' ? b : a
     winner.won += 1; loser.lost += 1
-    const close = Math.min(result.a, result.b) > 0
-    winner.tablePoints += close ? 2 : 3
-    loser.tablePoints += close ? 1 : 0
+    if (scoring.mode === 'result') {
+      winner.tablePoints += scoring.winPoints
+    }
   })
   return [...rows.values()].map((row) => ({
     ...row, setRatio: ratio(row.setsWon, row.setsLost), pointRatio: ratio(row.pointsFor, row.pointsAgainst),
-  })).sort((a, b) => b.won - a.won || b.tablePoints - a.tablePoints || b.setRatio - a.setRatio || b.pointRatio - a.pointRatio)
+  })).sort((a, b) => b.tablePoints - a.tablePoints || b.setRatio - a.setRatio || b.pointRatio - a.pointRatio || a.teamId.localeCompare(b.teamId))
 }
 
 export function canStartOnSharedCourts(
@@ -638,6 +661,24 @@ export function canStartOnSharedCourts(
     const activeB = resolveParticipantId(active.match.teamBId, active.matches)
     return activeA === teamA || activeA === teamB || activeB === teamA || activeB === teamB
   })
+}
+
+export type TournamentMatchPriority = {
+  phaseIndex: number
+  completedInPhase: number
+  matchesInPhase: number
+  teamGames: number
+  teamsLastEnd: number
+  scheduledStart: number
+}
+
+export function compareTournamentMatchPriority(a: TournamentMatchPriority, b: TournamentMatchPriority) {
+  return a.phaseIndex - b.phaseIndex
+    || a.completedInPhase * b.matchesInPhase - b.completedInPhase * a.matchesInPhase
+    || b.matchesInPhase - a.matchesInPhase
+    || a.teamGames - b.teamGames
+    || a.teamsLastEnd - b.teamsLastEnd
+    || a.scheduledStart - b.scheduledStart
 }
 
 export function dependentMatchIds(matches: Match[], changedMatch: Match) {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { alphabeticalLabel, calculateStandings, canStartOnSharedCourts, dependentMatchIds, estimateMatchMinutes, formatMinute, generateMatches, generateParallelMatches, getKnockoutWinner, isBalancedKnockout, isPowerOfTwo, isValidSetScore, knockoutSizesUpTo, knockoutTeamCountsUpTo, parseTeams, resolveMatchesForStandings, resolveParticipantId, tournamentEndMinute } from './core'
+import { alphabeticalLabel, calculateStandings, canStartOnSharedCourts, compareTournamentMatchPriority, dependentMatchIds, estimateMatchMinutes, formatMinute, generateMatches, generateParallelMatches, getKnockoutWinner, isBalancedKnockout, isPowerOfTwo, isValidSetScore, knockoutSizesUpTo, knockoutTeamCountsUpTo, parseTeams, resolveMatchesForStandings, resolveParticipantId, tournamentEndMinute } from './core'
 import type { TournamentConfig } from './types'
 
 const config: TournamentConfig = {
@@ -300,6 +300,25 @@ describe('tournament engine', () => {
     }))
   })
 
+  it('balances parallel tournaments by phase, completion ratio and phase length', () => {
+    const base = { phaseIndex: 0, completedInPhase: 0, matchesInPhase: 6, teamGames: 0, teamsLastEnd: 540, scheduledStart: 540 }
+    expect(compareTournamentMatchPriority(base, { ...base, phaseIndex: 1 })).toBeLessThan(0)
+    expect(compareTournamentMatchPriority(base, { ...base, completedInPhase: 1 })).toBeLessThan(0)
+    expect(compareTournamentMatchPriority({ ...base, matchesInPhase: 12 }, base)).toBeLessThan(0)
+
+    const longPhaseAtOneSixth = { ...base, completedInPhase: 2, matchesInPhase: 12 }
+    const shortPhaseAtOneSixth = { ...base, completedInPhase: 1, matchesInPhase: 6 }
+    expect(compareTournamentMatchPriority(longPhaseAtOneSixth, shortPhaseAtOneSixth)).toBeLessThan(0)
+    expect(compareTournamentMatchPriority({ ...base, completedInPhase: 0 }, longPhaseAtOneSixth)).toBeLessThan(0)
+  })
+
+  it('reduces team pauses when tournament progress is tied', () => {
+    const base = { phaseIndex: 0, completedInPhase: 2, matchesInPhase: 8, teamGames: 2, teamsLastEnd: 600, scheduledStart: 620 }
+    expect(compareTournamentMatchPriority({ ...base, teamGames: 1 }, base)).toBeLessThan(0)
+    expect(compareTournamentMatchPriority({ ...base, teamsLastEnd: 560 }, base)).toBeLessThan(0)
+    expect(compareTournamentMatchPriority({ ...base, scheduledStart: 600 }, base)).toBeLessThan(0)
+  })
+
   it('never schedules two matches for the same team at the same time, even with excess courts', () => {
     const teams = parseTeams('A\nB\nC\nD\nE')
     const matches = generateMatches(teams, { ...config, courts: 8, groupCount: 1, finalTeams: 0 }, 'groups')
@@ -440,6 +459,43 @@ describe('tournament engine', () => {
     const [match] = generateMatches(teams, { ...config, groupCount: 1, finalTeams: 0 }, 'groups')
     const standings = calculateStandings(teams, [{ ...match, status: 'completed', sets: [{ a: 21, b: 15 }, { a: 18, b: 21 }] }])
     expect(standings.map((row) => ({ played: row.played, points: row.tablePoints }))).toEqual([{ played: 1, points: 1 }, { played: 1, points: 1 }])
+  })
+
+  it('awards group points for each set won when configured', () => {
+    const teams = parseTeams('A\nB')
+    const [match] = generateMatches(teams, { ...config, setsPerMatch: 3, setPoints: [21, 21, 21], groupCount: 1, finalTeams: 0 }, 'groups')
+    const standings = calculateStandings(teams, [{
+      ...match,
+      status: 'completed',
+      sets: [{ a: 21, b: 15 }, { a: 18, b: 21 }, { a: 21, b: 19 }],
+      groupScoring: { mode: 'sets', setWinPoints: 1, winPoints: 3, drawPoints: 1 },
+    }])
+    expect(standings.map((row) => row.tablePoints)).toEqual([2, 1])
+  })
+
+  it('awards configurable result points and records an even-set draw', () => {
+    const teams = parseTeams('A\nB')
+    const [match] = generateMatches(teams, { ...config, setsPerMatch: 2, setPoints: [21, 21], groupCount: 1, finalTeams: 0 }, 'groups')
+    const scoring = { mode: 'result' as const, setWinPoints: 1, winPoints: 3, drawPoints: 2 }
+    const draw = calculateStandings(teams, [{ ...match, status: 'completed', sets: [{ a: 21, b: 15 }, { a: 18, b: 21 }], groupScoring: scoring }])
+    expect(draw.map((row) => ({ drawn: row.drawn, points: row.tablePoints }))).toEqual([{ drawn: 1, points: 2 }, { drawn: 1, points: 2 }])
+
+    const win = calculateStandings(teams, [{ ...match, status: 'completed', sets: [{ a: 21, b: 15 }, { a: 21, b: 18 }], groupScoring: scoring }])
+    expect(win.map((row) => row.tablePoints)).toEqual([3, 0])
+  })
+
+  it('breaks equal table points by set quotient before point quotient', () => {
+    const teams = parseTeams('A\nB\nC\nD')
+    const matches = generateMatches(teams, { ...config, setsPerMatch: 3, setPoints: [21, 21, 21], groupCount: 1, finalTeams: 0 }, 'groups')
+    const scoring = { mode: 'result' as const, setWinPoints: 1, winPoints: 0, drawPoints: 0 }
+    const completed = [
+      { ...matches[0], teamAId: teams[0].id, teamBId: teams[2].id, status: 'completed' as const, sets: [{ a: 21, b: 19 }, { a: 18, b: 21 }, { a: 21, b: 19 }], groupScoring: scoring },
+      { ...matches[1], teamAId: teams[0].id, teamBId: teams[3].id, status: 'completed' as const, sets: [{ a: 21, b: 19 }, { a: 18, b: 21 }, { a: 21, b: 19 }], groupScoring: scoring },
+      { ...matches[2], teamAId: teams[1].id, teamBId: teams[2].id, status: 'completed' as const, sets: [{ a: 21, b: 10 }, { a: 21, b: 10 }, { a: 21, b: 10 }], groupScoring: scoring },
+      { ...matches[3], teamAId: teams[0].id, teamBId: teams[2].id, status: 'completed' as const, sets: [{ a: 10, b: 21 }, { a: 10, b: 21 }, { a: 10, b: 21 }], groupScoring: scoring },
+    ]
+    const standings = calculateStandings(teams, completed)
+    expect(standings.findIndex((row) => row.teamId === teams[1].id)).toBeLessThan(standings.findIndex((row) => row.teamId === teams[0].id))
   })
 
   it('supports tournament windows that finish after midnight', () => {
