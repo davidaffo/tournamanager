@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { Check, Copy, Download, ExternalLink, Maximize2, RefreshCw, Trash2, Upload, X } from 'lucide-react'
 import QRCode from 'qrcode'
 import { createNextcloudPublication, destroyNextcloudPublication, publicNextcloudDataUrl, updateNextcloudPublication, type NextcloudPublication } from './nextcloud'
+import { loadPublicBridge } from './publicBridge'
 import type { PublicSnapshot } from './publicSnapshot'
 
 const STORAGE_KEY = 'tournamanager-nextcloud'
@@ -87,12 +88,16 @@ export function NextcloudPublisher({ snapshot }: { snapshot: PublicSnapshot }) {
     setBusy(true); setStatus('Creazione del file pubblico…')
     try {
       const suffix = crypto.randomUUID().slice(0, 8)
-      const created = await createNextcloudPublication(credentials, `${fileSlug(snapshot.tournamentName)}-${suffix}.json`, snapshot)
+      const created = await createNextcloudPublication(credentials, `${fileSlug(snapshot.tournamentName)}-${suffix}.live.js`, snapshot)
       setPublication(created)
       setBaseUrl(created.baseUrl)
       setUsername(created.username)
+      const publicValue = await loadPublicBridge(created.publicDataUrl)
+      if (typeof publicValue !== 'object' || publicValue === null || (publicValue as PublicSnapshot).app !== 'tournamanager-live') {
+        throw new Error('Nextcloud ha pubblicato il file, ma il browser non ha ricevuto uno stato TournaManager valido.')
+      }
       setSynced(true)
-      setStatus('Pubblicazione attiva.')
+      setStatus('Pubblicazione attiva e verificata dal browser.')
     } catch (error) {
       setStatus(error instanceof Error ? error.message : 'Pubblicazione Nextcloud non riuscita. Controlla anche la configurazione CORS del server.')
     } finally { setBusy(false) }

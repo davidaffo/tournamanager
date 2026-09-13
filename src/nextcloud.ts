@@ -1,4 +1,5 @@
 import type { PublicSnapshot } from './publicSnapshot'
+import { serializePublicBridge } from './publicBridge'
 
 export type NextcloudCredentials = { baseUrl: string; username: string; password: string }
 export type NextcloudPublication = {
@@ -112,8 +113,8 @@ async function ensureFolder(credentials: NextcloudCredentials, remotePath: strin
 async function upload(credentials: NextcloudCredentials, remotePath: string, snapshot: PublicSnapshot, create = false) {
   const response = await davFetch(credentials, davUrl(credentials, remotePath), {
     method: 'PUT',
-    headers: { 'Content-Type': 'application/json; charset=utf-8', ...(create ? { 'If-None-Match': '*' } : {}) },
-    body: JSON.stringify(snapshot),
+    headers: { 'Content-Type': 'application/javascript; charset=utf-8', ...(create ? { 'If-None-Match': '*' } : {}) },
+    body: serializePublicBridge(snapshot),
   })
   if (!response.ok) throw responseError(response.status)
 }

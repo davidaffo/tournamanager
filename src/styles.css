@@ -355,6 +355,7 @@ td:nth-child(2) { min-width: 150px; text-align: left; }
 .public-header .brand { flex: 0 0 auto; padding: 0 20px 0 0; border-right: 1px solid var(--line); color: var(--ink); }
 .public-header h1 { margin: 3px 0; font-size: 25px; }
 .public-header p { margin: 0; color: var(--muted); font-size: 10px; }
+.public-refresh { margin-left: auto; flex: 0 0 auto; }
 .public-warning { margin: 16px 0 0; padding: 10px 12px; border: 1px solid #e7be62; border-radius: 9px; color: #805b15; background: #fff4d4; font-size: 10px; }
 .public-tournaments { margin: 22px 0; display: flex; gap: 8px; overflow-x: auto; }
 .public-tournaments button { flex: 0 0 155px; padding: 10px 12px; display: grid; gap: 2px; border: 1px solid var(--line); border-radius: 10px; color: var(--ink); background: var(--card); text-align: left; }
@@ -544,6 +545,7 @@ td:nth-child(2) { min-width: 150px; text-align: left; }
   .public-view { padding: 15px 12px 50px; }
   .public-header { align-items: flex-start; flex-direction: column; gap: 14px; }
   .public-header .brand { padding-right: 0; border-right: 0; }
+  .public-refresh { width: 100%; margin-left: 0; }
   .public-results article { grid-template-columns: 40px minmax(0, 1fr) 44px minmax(0, 1fr); }
   .public-results small { grid-column: 1 / -1; grid-row: 2; }
   .result-modal { max-height: calc(100vh - 24px); padding: 25px 18px; }

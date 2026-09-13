@@ -32,15 +32,17 @@ describe('collegamento Nextcloud', () => {
       }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
     vi.stubGlobal('fetch', fetchMock)
 
-    const publication = await createNextcloudPublication({ baseUrl: 'https://cloud.example.it/apps/files', username: 'mario', password: 'app-password' }, 'volley-day.json', snapshot)
+    const publication = await createNextcloudPublication({ baseUrl: 'https://cloud.example.it/apps/files', username: 'mario', password: 'app-password' }, 'volley-day.live.js', snapshot)
 
-    expect(publication.remotePath).toBe('/TournaManager/volley-day.json')
+    expect(publication.remotePath).toBe('/TournaManager/volley-day.live.js')
     expect(publication.publicDataUrl).toBe('https://cloud.example.it/public.php/dav/files/pubblico')
     expect(fetchMock).toHaveBeenCalledTimes(5)
     expect(String(fetchMock.mock.calls[4][0])).toBe('https://cloud.example.it/index.php/apps/webapppassword/api/v1/shares?format=json')
     expect(String(fetchMock.mock.calls[4][1]?.body)).toContain('shareType=3')
     expect(new Headers(fetchMock.mock.calls[0][1]?.headers).get('X-Requested-With')).toBe('XMLHttpRequest')
     expect(fetchMock.mock.calls[0][1]?.mode).toBe('cors')
+    expect(new Headers(fetchMock.mock.calls[3][1]?.headers).get('Content-Type')).toContain('application/javascript')
+    expect(String(fetchMock.mock.calls[3][1]?.body)).toContain('tournamanager-live-snapshot')
   })
 
   it('prova a eliminare il file anche se la rimozione della share fallisce', async () => {
