@@ -263,7 +263,10 @@ function generateDrafts(teams: Team[], config: TournamentConfig, kind: FormatKin
         groups.forEach((group, groupIndex) => {
           const groupLabel = alphabeticalLabel(groupIndex)
           const pool = `${phaseIndex + 1}${groupLabel}`
-          const rounds = roundRobinRounds(group)
+          const firstLeg = roundRobinRounds(group)
+          const rounds = phase.groupLegs === 2
+            ? [...firstLeg, ...firstLeg.map((pairings) => pairings.map(([teamAId, teamBId]) => [teamBId, teamAId] as [string, string]))]
+            : firstLeg
           phaseRounds = Math.max(phaseRounds, rounds.length)
           rounds.forEach((pairings, round) => pairings.forEach(([teamAId, teamBId]) => drafts.push({
             id: `match-${++sequence}`, phaseId: phase.id, phaseName: `${phase.name} · Girone ${groupLabel}`, pool,

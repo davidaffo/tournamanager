@@ -34,6 +34,7 @@ export type TournamentPhase = {
   format: FormatKind
   groupCount: number
   groupComposition: GroupComposition
+  groupLegs?: 1 | 2
   advanceAll: boolean
   advancingTeams: number
   thirdPlaceFinal: boolean

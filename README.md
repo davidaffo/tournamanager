@@ -7,7 +7,7 @@ con un preset operativo pensato per la pallavolo.
 
 - importazione delle squadre tramite copia-incolla;
 - editor completo delle fasi, con gironi per livello o incrociati e qualificazione automatica o configurabile;
-- gironi all’italiana ed eliminazione diretta;
+- gironi all’italiana con sola andata o andata e ritorno, ed eliminazione diretta;
 - tornei S3 Red, Green e White oppure 6 contro 6, con stime temporali specifiche per categoria e ritmo di gioco;
 - stima della durata in base al punteggio di ogni set, ai campi condivisi e alla pausa configurabile tra le fasi;
 - gestione coordinata di più tornei paralleli sugli stessi campi;

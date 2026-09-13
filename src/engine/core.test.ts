@@ -56,6 +56,16 @@ describe('tournament engine', () => {
     teams.forEach((team) => expect(matches.filter((m) => m.teamAId === team.id || m.teamBId === team.id)).toHaveLength(3))
   })
 
+  it('generates reversed return matches for home-and-away groups', () => {
+    const teams = parseTeams('A\nB\nC\nD')
+    const phases = [{ id: 'p1', name: 'Girone', format: 'groups' as const, groupCount: 1, groupComposition: 'strength' as const, groupLegs: 2 as const, advanceAll: true, advancingTeams: 4, thirdPlaceFinal: false }]
+    const matches = generateMatches(teams, config, 'groups', phases)
+    expect(matches).toHaveLength(12)
+    matches.slice(0, 6).forEach((firstLeg) => {
+      expect(matches.some((returnLeg) => returnLeg.teamAId === firstLeg.teamBId && returnLeg.teamBId === firstLeg.teamAId)).toBe(true)
+    })
+  })
+
   it('rotates group teams so nobody gets a disproportionately long break', () => {
     const teams = parseTeams(Array.from({ length: 8 }, (_, index) => `Team ${index + 1}`).join('\n'))
     const phases = [{ id: 'p1', name: 'Gironi', format: 'groups' as const, groupCount: 2, groupComposition: 'strength' as const, advanceAll: true, advancingTeams: 8, thirdPlaceFinal: false }]

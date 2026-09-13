@@ -73,7 +73,7 @@ const makeDefaultPhases = (teamCount: number): TournamentPhase[] => {
   if (teamCount < 2) return []
   const divisors = Array.from({ length: Math.max(1, Math.floor(teamCount / 2)) }, (_, index) => index + 1).filter((count) => teamCount % count === 0)
   const groupCount = divisors.sort((a, b) => Math.abs(teamCount / a - 4) - Math.abs(teamCount / b - 4))[0] ?? 1
-  return [{ id: 'phase-1', name: 'Fase a gironi', format: 'groups', groupCount, groupComposition: 'strength', advanceAll: true, advancingTeams: teamCount, thirdPlaceFinal: false }]
+  return [{ id: 'phase-1', name: 'Fase a gironi', format: 'groups', groupCount, groupComposition: 'strength', groupLegs: 1, advanceAll: true, advancingTeams: teamCount, thirdPlaceFinal: false }]
 }
 
 const enforceFinalGroupComposition = (phases: TournamentPhase[]) => phases.map((phase, index) => index === phases.length - 1 && index > 0 && phase.format === 'groups' ? { ...phase, groupComposition: 'strength' as const } : phase)
@@ -108,6 +108,7 @@ const makeInitialWorkspaces = (): MultiTournamentState => {
               return {
                 ...phase,
                 groupComposition: phase.groupComposition ?? 'strength',
+                groupLegs: phase.groupLegs === 2 ? 2 : 1,
                 advanceAll: phase.advanceAll ?? phaseIndex === 0,
                 advancingTeams: phase.advancingTeams ?? tournament.state.teams.length,
               }
@@ -346,6 +347,7 @@ function readConfigurationFile(contents: string): MultiTournamentState {
         format: phase.format,
         groupCount: clampInteger(Number(phase.groupCount), 1, MAX_TEAMS),
         groupComposition: phase.groupComposition === 'cross' ? 'cross' : 'strength',
+        groupLegs: phase.groupLegs === 2 ? 2 : 1,
         advanceAll: Boolean(phase.advanceAll),
         advancingTeams: clampInteger(Number(phase.advancingTeams), 1, MAX_TEAMS),
         thirdPlaceFinal: Boolean(phase.thirdPlaceFinal),
@@ -523,12 +525,12 @@ export default function App() {
     if (nextComposition) candidates.push({
       label: 'Aggiungi gironi finali per livello',
       description: 'Raggruppa le squadre nelle rispettive fasce di classifica per determinare tutte le posizioni finali.',
-      phase: { id: 'suggested-groups', name: 'Gironi finali', format: 'groups', groupCount, groupComposition: nextComposition, advanceAll: true, advancingTeams: entrants, thirdPlaceFinal: false },
+      phase: { id: 'suggested-groups', name: 'Gironi finali', format: 'groups', groupCount, groupComposition: nextComposition, groupLegs: 1, advanceAll: true, advancingTeams: entrants, thirdPlaceFinal: false },
     })
     candidates.push({
       label: 'Aggiungi eliminazione diretta',
       description: suggestedKnockoutSize === entrants ? `Crea un tabellone completo con tutte le ${entrants} squadre.` : `Qualifica ${suggestedKnockoutSize} squadre per creare un tabellone completo senza passaggi diretti.`,
-      phase: { id: 'suggested-knockout', name: 'Fase finale', format: 'knockout', groupCount: 1, groupComposition: 'strength', advanceAll: false, advancingTeams: 1, thirdPlaceFinal: false },
+      phase: { id: 'suggested-knockout', name: 'Fase finale', format: 'knockout', groupCount: 1, groupComposition: 'strength', groupLegs: 1, advanceAll: false, advancingTeams: 1, thirdPlaceFinal: false },
     })
     candidates.forEach((candidate) => {
       const candidateState = appendSuggestedPhase(managerState, candidate.phase)
@@ -745,7 +747,7 @@ export default function App() {
       const groupCount = divisors.sort((a, b) => Math.abs(entrants / a - 4) - Math.abs(entrants / b - 4))[0] ?? 1
       const followingKnockout = tournament.state.phases[insertionIndex]
       const advancingTeams = lastIsKnockout ? knockoutTeamCountsUpTo(entrants, Math.max(1, followingKnockout?.groupCount ?? 1)).at(-1) ?? entrants : entrants
-      const next: TournamentPhase = { id: `phase-${Date.now()}-${tournamentIndex}`, name: `Fase ${insertionIndex + 1}`, format: 'groups', groupCount, groupComposition: 'strength', advanceAll: advancingTeams === entrants, advancingTeams, thirdPlaceFinal: false }
+      const next: TournamentPhase = { id: `phase-${Date.now()}-${tournamentIndex}`, name: `Fase ${insertionIndex + 1}`, format: 'groups', groupCount, groupComposition: 'strength', groupLegs: 1, advanceAll: advancingTeams === entrants, advancingTeams, thirdPlaceFinal: false }
       const nextPhases = [...tournament.state.phases]
       nextPhases.splice(insertionIndex, 0, next)
       return { ...tournament, state: { ...tournament.state, phases: nextPhases, matches: [] } }
@@ -971,12 +973,13 @@ export default function App() {
                         const sizeLabel = minimum === maximum ? `${minimum} squadre ciascuno` : `${minimum}–${maximum} squadre`
                         return <option className={balanced || suggestedForTime ? 'suggested-option' : ''} value={count} key={count}>{count} {count === 1 ? 'girone' : 'gironi'} · {sizeLabel}{balanced && !suggestedForTime ? ' · consigliato' : ''}{suggestedForTime ? ' · consigliato per i tempi' : ''}</option>
                       })}</select></label>
+                      <label className="field"><span>Incontri del girone</span><select value={phase.groupLegs === 2 ? 2 : 1} onChange={(event) => updatePhase(phase.id, { groupLegs: Number(event.target.value) as 1 | 2 })}><option value="1">Solo andata</option><option value="2">Andata e ritorno</option></select></label>
                       {!isLast && <label className="check-field advance-all"><input type="checkbox" checked={phase.advanceAll} onChange={(event) => {
                         if (event.target.checked && nextIsKnockout && !isBalancedKnockout(entrants, nextBracketCount)) return
                         updatePhase(phase.id, { advanceAll: event.target.checked, advancingTeams: event.target.checked ? entrants : nextIsKnockout ? validKnockoutSizes.at(-1) ?? 2 : Math.min(entrants, Math.max(1, phase.advancingTeams)) })
                       }} /> Passano tutte</label>}
                       {!isLast && !phase.advanceAll && (nextIsKnockout ? <label className="field"><span>Squadre alla fase finale</span><select value={phase.advancingTeams} onChange={(event) => updatePhase(phase.id, { advancingTeams: Number(event.target.value) })}>{!validKnockoutSizes.includes(phase.advancingTeams) && <option value={phase.advancingTeams} disabled>{phase.advancingTeams} squadre · non valido</option>}{validKnockoutSizes.map((size) => <option value={size} key={size}>{size} squadre · tabellone completo</option>)}</select></label> : <NumberField label="Squadre alla fase successiva" value={phase.advancingTeams} onChange={(value) => updatePhase(phase.id, { advancingTeams: Math.max(1, Math.min(entrants, value)) })} min={1} />)}
-                      <div className="phase-summary">{teamsPerGroupLabel} squadre per girone{isLast ? ' · classifica finale' : phase.advanceAll ? ' · passano tutte' : ` · ${phase.advancingTeams} passano`}</div>
+                      <div className="phase-summary">{teamsPerGroupLabel} squadre per girone · {phase.groupLegs === 2 ? 'andata e ritorno' : 'solo andata'}{isLast ? ' · classifica finale' : phase.advanceAll ? ' · passano tutte' : ` · ${phase.advancingTeams} passano`}</div>
                     </> : <>
                       <label className="field"><span>Tabelloni paralleli</span><select value={phase.groupCount} onChange={(event) => updateKnockoutBracketCount(phase.id, Number(event.target.value))}>{!validBracketCounts.includes(phase.groupCount) && <option value={phase.groupCount} disabled>{phase.groupCount} · configurazione non valida</option>}{validBracketCounts.map((count) => { const total = index === 0 ? entrants : knockoutTeamCountsUpTo(knockoutAvailableTeams, count).at(-1) as number; return <option value={count} key={count}>{count === 1 ? `1 tabellone da ${total}` : `${count} tabelloni da ${total / count}`}</option> })}</select></label>
                       <label className="check-field"><input type="checkbox" checked={phase.thirdPlaceFinal} onChange={(event) => updatePhase(phase.id, { thirdPlaceFinal: event.target.checked })} /> Finale 3° posto</label>
@@ -1094,7 +1097,7 @@ function StructureView({ config, teams, matches, selectedFormat, phases, onConfi
         const qualifiersPerPool = phase.advanceAll ? null : Math.floor(phase.advancingTeams / Math.max(1, phase.groupCount))
         const bestQualifiers = phase.advanceAll ? 0 : phase.advancingTeams % Math.max(1, phase.groupCount)
         return <section className={`phase-block ${phase.format === 'knockout' ? 'finals-phase' : ''}`} key={phase.id}>
-          <header className="phase-heading"><div><span>Fase {phaseIndex + 1}</span><h3>{phase.name}</h3></div><p>{phase.format === 'groups' ? `${phase.groupCount} gironi${phaseIndex > 0 ? phase.groupComposition === 'cross' ? ' · fasce incrociate' : ' · fasce di classifica' : ''}${phaseIndex < phases.length - 1 ? phase.advanceAll ? ' · passano tutte' : ` · ${phase.advancingTeams} qualificate` : ''}` : phase.groupCount > 1 ? `${phase.groupCount} tabelloni paralleli per posizioni finali` : 'Eliminazione diretta'}</p></header>
+          <header className="phase-heading"><div><span>Fase {phaseIndex + 1}</span><h3>{phase.name}</h3></div><p>{phase.format === 'groups' ? `${phase.groupCount} gironi · ${phase.groupLegs === 2 ? 'andata e ritorno' : 'solo andata'}${phaseIndex > 0 ? phase.groupComposition === 'cross' ? ' · fasce incrociate' : ' · fasce di classifica' : ''}${phaseIndex < phases.length - 1 ? phase.advanceAll ? ' · passano tutte' : ` · ${phase.advancingTeams} qualificate` : ''}` : phase.groupCount > 1 ? `${phase.groupCount} tabelloni paralleli per posizioni finali` : 'Eliminazione diretta'}</p></header>
           {phase.format === 'groups' ? <div className="pools-grid">{phasePools.map((pool) => <article className="pool-card" key={pool.name}>
             <header><h4>Girone {pool.name.replace(/^\d+/, '')}</h4><span>{pool.teams.length} squadre</span></header>
             <ol>{pool.teams.map((source) => <li key={source}>{sourceLabel(source)}</li>)}</ol>
