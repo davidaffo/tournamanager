@@ -1,6 +1,6 @@
 {
-  "name": "TorunaManager",
-  "short_name": "TorunaManager",
+  "name": "TournaManager",
+  "short_name": "TournaManager",
   "start_url": "./",
   "display": "standalone",
   "background_color": "#f3f1e8",

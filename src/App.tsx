@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react'
 import {
   CalendarDays, Check, ChevronRight, CircleDot, ClipboardList, Clock3,
-  GitBranch, LayoutDashboard, MapPin, Monitor, Moon, Play, Plus, RotateCcw, Save, Settings2, Sun, Trash2, Trophy, Users, X,
+  Download, GitBranch, LayoutDashboard, MapPin, Monitor, Moon, Play, Plus, RotateCcw, Save, Settings2, Sun, Trash2, Trophy, Upload, Users, X,
 } from 'lucide-react'
 import { alphabeticalLabel, calculateStandings, canStartOnSharedCourts, dependentMatchIds, estimateMatchMinutes, formatMinute, generateMatches, generateParallelMatches, getKnockoutWinner, getSetWinner, isBalancedKnockout, isValidSetScore, knockoutSizesUpTo, knockoutTeamCountsUpTo, parseTeams, resolveMatchesForStandings, resolveParticipantId, toMinute, tournamentEndMinute } from './engine/core'
 import { demoTeamNames, demoTournamentTeamNames } from './engine/demo'
@@ -30,12 +30,8 @@ const defaultConfig: TournamentConfig = {
   thirdPlaceFinal: true,
 }
 
-const STATE_KEY = 'torunamanager-state-v1'
-const MULTI_STATE_KEY = 'torunamanager-multi-state-v2'
-const LEGACY_MULTI_STATE_KEY = 'torunamanager-multi-state-v1'
-const LEGACY_STATE_KEYS = ['tournamanager-state-v1', 'tornei-live-state-v1']
-const THEME_KEY = 'torunamanager-theme'
-const LEGACY_THEME_KEYS = ['tournamanager-theme', 'tornei-live-theme']
+const MULTI_STATE_KEY = 'tournamanager-multi-state-v2'
+const THEME_KEY = 'tournamanager-theme'
 const MAX_TEAMS = 128
 const MAX_COURTS = 16
 const MAX_SETS = 9
@@ -68,6 +64,7 @@ const normalizeConfig = (config: TournamentConfig): TournamentConfig => ({
   tournamentType: normalizeTournamentType(config.tournamentType),
   courts: clampInteger(config.courts ?? defaultConfig.courts, 1, MAX_COURTS),
   setsPerMatch: clampInteger(config.setsPerMatch ?? defaultConfig.setsPerMatch, 1, MAX_SETS),
+  winByTwo: false,
   phaseBreakMinutes: clampInteger(config.phaseBreakMinutes ?? defaultConfig.phaseBreakMinutes, 0, 240),
   setPoints: normalizeSetPoints(config),
 })
@@ -82,41 +79,6 @@ const makeDefaultPhases = (teamCount: number): TournamentPhase[] => {
 const enforceFinalGroupComposition = (phases: TournamentPhase[]) => phases.map((phase, index) => index === phases.length - 1 && index > 0 && phase.format === 'groups' ? { ...phase, groupComposition: 'strength' as const } : phase)
 
 const makeInitialState = (): TournamentState => {
-  const saved = localStorage.getItem(STATE_KEY) ?? LEGACY_STATE_KEYS.map((key) => localStorage.getItem(key)).find(Boolean)
-  if (saved) {
-    try {
-      const parsed = JSON.parse(saved) as TournamentState
-      const config = normalizeConfig({
-        ...parsed.config,
-        tournamentType: normalizeTournamentType(parsed.config.tournamentType),
-        setsPerMatch: parsed.config.setsPerMatch ?? 2,
-        pointsPerSet: parsed.config.pointsPerSet ?? 21,
-        phaseBreakMinutes: parsed.config.phaseBreakMinutes ?? 15,
-        groupCount: parsed.config.groupCount ?? 4,
-        finalTeams: parsed.config.finalTeams ?? 8,
-        thirdPlaceFinal: parsed.config.thirdPlaceFinal ?? true,
-      })
-      const previousFormatWasRemoved = String(parsed.selectedFormat) === 'balanced'
-      const inferredTeams = parseTeams(parsed.teams.map((team) => team.name).join('\n'))
-      const teams = parsed.teams.map((team, index) => ({ ...team, club: team.club ?? inferredTeams[index]?.club ?? '' }))
-      return {
-        ...parsed,
-        teams,
-        selectedFormat: previousFormatWasRemoved ? 'groups' : parsed.selectedFormat,
-        config,
-        phases: enforceFinalGroupComposition(parsed.phases?.length ? parsed.phases.slice(0, MAX_PHASES).map((phase, index) => ({
-          ...phase,
-          groupComposition: phase.groupComposition ?? 'strength',
-          advanceAll: phase.advanceAll ?? index === 0,
-          advancingTeams: phase.advancingTeams ?? (index === 0 ? teams.length : 1),
-        })) : makeDefaultPhases(teams.length)),
-        matches: (previousFormatWasRemoved ? generateMatches(teams, config, 'groups') : parsed.matches).map((match) => ({
-          ...match,
-          status: String(match.status) === 'called' ? 'playing' : match.status,
-        })),
-      }
-    } catch { /* use defaults */ }
-  }
   const teams = import.meta.env.DEV ? parseTeams(demoTeamNames.join('\n')) : []
   return {
     config: defaultConfig,
@@ -128,13 +90,11 @@ const makeInitialState = (): TournamentState => {
 }
 
 const makeInitialWorkspaces = (): MultiTournamentState => {
-  const currentSaved = localStorage.getItem(MULTI_STATE_KEY)
-  const saved = currentSaved ?? localStorage.getItem(LEGACY_MULTI_STATE_KEY)
-  const migrating = !currentSaved && Boolean(saved)
+  const saved = localStorage.getItem(MULTI_STATE_KEY)
   if (saved) {
     try {
       const parsed = JSON.parse(saved) as MultiTournamentState
-      if (parsed.tournaments?.length && parsed.tournaments.length <= 3) {
+      if (parsed.tournaments?.length) {
         const template = parsed.tournaments[0].state
         const shared = template.config
         const tournaments = parsed.tournaments.map((tournament, tournamentIndex) => ({
@@ -148,8 +108,8 @@ const makeInitialWorkspaces = (): MultiTournamentState => {
               return {
                 ...phase,
                 groupComposition: phase.groupComposition ?? 'strength',
-                advanceAll: migrating && phaseIndex === 0 && phase.format === 'groups' ? true : phase.advanceAll ?? phaseIndex === 0,
-                advancingTeams: migrating && phaseIndex === 0 && phase.format === 'groups' ? tournament.state.teams.length : phase.advancingTeams ?? tournament.state.teams.length,
+                advanceAll: phase.advanceAll ?? phaseIndex === 0,
+                advancingTeams: phase.advancingTeams ?? tournament.state.teams.length,
               }
             })),
           },
@@ -164,7 +124,7 @@ const makeInitialWorkspaces = (): MultiTournamentState => {
         const schedules = generateParallelMatches(tournaments.map((tournament) => ({ id: tournament.id, teams: tournament.state.teams, config: tournament.state.config, phases: tournament.state.phases })))
         return { ...parsed, activeId, tournaments: tournaments.map((tournament) => ({ ...tournament, state: { ...tournament.state, matches: schedules[tournament.id] ?? [] } })) }
       }
-    } catch { /* migrate the existing single tournament */ }
+    } catch { /* use defaults */ }
   }
   const initial = makeInitialState()
   return { activeId: 'tournament-1', tournaments: [{ id: 'tournament-1', label: 'Torneo 1', state: initial }] }
@@ -230,11 +190,44 @@ function appendSuggestedPhase(current: MultiTournamentState, suggestedPhase: Tou
   }
 }
 
+function DraftIntegerInput({ value, onCommit, min = 0, max, ariaLabel, autoFocus }: { value: number; onCommit: (value: number) => void; min?: number; max?: number; ariaLabel?: string; autoFocus?: boolean }) {
+  const [draft, setDraft] = useState(String(value))
+  const valueRef = useRef(value)
+  valueRef.current = value
+
+  useEffect(() => setDraft(String(value)), [value])
+
+  const commit = () => {
+    const parsed = Number(draft)
+    const next = clampInteger(Number.isFinite(parsed) && draft.trim() !== '' ? parsed : value, min, max ?? Number.MAX_SAFE_INTEGER)
+    setDraft(String(next))
+    if (next !== value) {
+      onCommit(next)
+      window.setTimeout(() => setDraft(String(valueRef.current)), 0)
+    }
+  }
+
+  return <input
+    type="text"
+    inputMode="numeric"
+    pattern="[0-9]*"
+    value={draft}
+    aria-label={ariaLabel}
+    autoFocus={autoFocus}
+    onChange={(event) => {
+      const next = event.target.value
+      if (next === '' || /^\d+$/.test(next)) setDraft(next)
+    }}
+    onBlur={commit}
+    onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur() }}
+  />
+}
+
 function NumberField({ label, value, onChange, suffix, min = 0, max }: { label: string; value: number; onChange: (value: number) => void; suffix?: string; min?: number; max?: number }) {
   return <label className="field compact-field">
     <span>{label}</span>
     <div className="number-wrap">
-      <input type="number" min={min} max={max} value={value} onChange={(event) => { const next = Number(event.target.value); if (Number.isFinite(next)) onChange(next) }} />
+      <DraftIntegerInput value={value} onCommit={onChange} min={min} max={max} />
       {suffix && <small>{suffix}</small>}
     </div>
   </label>
@@ -267,7 +260,7 @@ function ParticipantBadge({ source, matches, teamById }: { source: string; match
   return team ? <TeamBadge team={team} /> : <span className="team-name muted">{participantLabel(source, matches, teamById)}</span>
 }
 
-function ResultEditor({ match, matches, teams, config, onSave, onClose }: { match: Match; matches: Match[]; teams: Team[]; config: TournamentConfig; onSave: (sets: SetScore[]) => void; onClose: () => void }) {
+function ResultEditor({ match, matches, teams, config, onSave, onDelete, onClose }: { match: Match; matches: Match[]; teams: Team[]; config: TournamentConfig; onSave: (sets: SetScore[]) => void; onDelete: () => void; onClose: () => void }) {
   const modalRef = useRef<HTMLElement>(null)
   const targets = normalizeSetPoints(config)
   const [sets, setSets] = useState<SetScore[]>(match.sets.length === config.setsPerMatch ? match.sets : targets.map((target, index) => ({ a: target, b: Math.max(0, target - 3 - index) })))
@@ -290,7 +283,7 @@ function ResultEditor({ match, matches, teams, config, onSave, onClose }: { matc
     window.addEventListener('keydown', handleKey)
     return () => { window.removeEventListener('keydown', handleKey); previousFocus?.focus() }
   }, [onClose])
-  const setsValid = sets.length === config.setsPerMatch && sets.every((set, index) => isValidSetScore(set, targets[index], config.winByTwo))
+  const setsValid = sets.length === config.setsPerMatch && sets.every((set, index) => isValidSetScore(set, targets[index], false))
   const resultValid = setsValid && (Boolean(match.pool) || Boolean(knockoutWinner))
   const update = (index: number, side: 'a' | 'b', value: number) => setSets((current) => current.map((set, i) => i === index ? { ...set, [side]: Number.isFinite(value) ? Math.max(0, Math.min(999, value)) : 0 } : set))
   return <div className="scrim" onMouseDown={onClose}>
@@ -304,21 +297,77 @@ function ResultEditor({ match, matches, teams, config, onSave, onClose }: { matc
       <div className="set-list">
         {sets.map((set, index) => <div className="set-row" key={index}>
           <span>Set {index + 1}</span>
-          <input autoFocus={index === 0} min={0} max={999} aria-label={`Punti ${teamA?.name} set ${index + 1}`} type="number" value={set.a} onChange={(event) => update(index, 'a', Number(event.target.value))} />
+          <DraftIntegerInput autoFocus={index === 0} min={0} max={999} ariaLabel={`Punti ${teamA?.name} set ${index + 1}`} value={set.a} onCommit={(value) => update(index, 'a', value)} />
           <span>–</span>
-          <input min={0} max={999} aria-label={`Punti ${teamB?.name} set ${index + 1}`} type="number" value={set.b} onChange={(event) => update(index, 'b', Number(event.target.value))} />
-          <small>{config.winByTwo ? `${targets[index]} con 2 punti di scarto` : `punto secco a ${targets[index]}`}</small>
+          <DraftIntegerInput min={0} max={999} ariaLabel={`Punti ${teamB?.name} set ${index + 1}`} value={set.b} onCommit={(value) => update(index, 'b', value)} />
+          <small>Set a {targets[index]} punti</small>
         </div>)}
       </div>
-      {!setsValid && <p className="result-error">Ogni set deve rispettare il punteggio configurato{config.winByTwo ? ' e avere almeno 2 punti di scarto' : ''}.</p>}
-      {!match.pool && <p className="result-rule">In caso di parità nei set passa chi ha più punti complessivi; a ulteriore parità, chi ha vinto l’ultimo set.</p>}
+      {!setsValid && <p className="result-error">In ogni set vince chi raggiunge il punteggio configurato.</p>}
+      {!match.pool && <p className="result-rule">A parità di set passa chi ha più punti complessivi; poi chi ha vinto l’ultimo set.</p>}
       {!match.pool && setsValid && knockoutWinner && <p className="result-rule"><strong>Passa {knockoutWinner === 'a' ? teamA?.name : teamB?.name}.</strong></p>}
       <div className="modal-actions">
+        {match.status === 'completed' && <button className="button danger" onClick={onDelete}><Trash2 size={16} /> Elimina risultato</button>}
         <button className="button secondary" onClick={onClose}>Annulla</button>
         <button className="button primary" disabled={!resultValid} onClick={() => onSave(sets)}><Check size={18} /> Salva risultato</button>
       </div>
     </section>
   </div>
+}
+
+type ConfigurationFile = {
+  app: 'tournamanager'
+  version: 1
+  tournaments: Array<{ label: string; state: Omit<TournamentState, 'matches'> }>
+}
+
+const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null
+
+function readConfigurationFile(contents: string): MultiTournamentState {
+  const file: unknown = JSON.parse(contents)
+  if (!isRecord(file) || file.app !== 'tournamanager' || file.version !== 1 || !Array.isArray(file.tournaments) || file.tournaments.length === 0) {
+    throw new Error('File non valido')
+  }
+
+  const tournaments = file.tournaments.map((entry, tournamentIndex): TournamentWorkspace => {
+    if (!isRecord(entry) || !isRecord(entry.state) || !isRecord(entry.state.config) || !Array.isArray(entry.state.teams) || !Array.isArray(entry.state.phases)) {
+      throw new Error('File non valido')
+    }
+    const config = normalizeConfig({ ...defaultConfig, ...entry.state.config } as TournamentConfig)
+    const teams = entry.state.teams.slice(0, MAX_TEAMS).map((team, teamIndex): Team => {
+      if (!isRecord(team) || typeof team.name !== 'string' || !team.name.trim()) throw new Error('File non valido')
+      return { id: `team-${teamIndex + 1}`, name: team.name.trim(), seed: teamIndex + 1, club: typeof team.club === 'string' ? team.club : '' }
+    })
+    const phases = entry.state.phases.slice(0, MAX_PHASES).map((phase, phaseIndex): TournamentPhase => {
+      if (!isRecord(phase) || (phase.format !== 'groups' && phase.format !== 'knockout')) throw new Error('File non valido')
+      return {
+        id: `phase-${phaseIndex + 1}-${tournamentIndex + 1}`,
+        name: typeof phase.name === 'string' && phase.name.trim() ? phase.name.trim() : `Fase ${phaseIndex + 1}`,
+        format: phase.format,
+        groupCount: clampInteger(Number(phase.groupCount), 1, MAX_TEAMS),
+        groupComposition: phase.groupComposition === 'cross' ? 'cross' : 'strength',
+        advanceAll: Boolean(phase.advanceAll),
+        advancingTeams: clampInteger(Number(phase.advancingTeams), 1, MAX_TEAMS),
+        thirdPlaceFinal: Boolean(phase.thirdPlaceFinal),
+      }
+    })
+    const id = `tournament-imported-${tournamentIndex + 1}`
+    return {
+      id,
+      label: typeof entry.label === 'string' && entry.label.trim() ? entry.label.trim() : `Torneo ${tournamentIndex + 1}`,
+      state: { config, teams, phases: enforceFinalGroupComposition(phases), selectedFormat: phases[0]?.format ?? 'groups', matches: [] },
+    }
+  })
+
+  const shared = tournaments[0].state.config
+  const sharedKeys: Array<keyof TournamentConfig> = ['name', 'date', 'startTime', 'endTime', 'courts', 'phaseBreakMinutes']
+  return {
+    activeId: tournaments[0].id,
+    tournaments: tournaments.map((tournament) => ({
+      ...tournament,
+      state: { ...tournament.state, config: { ...tournament.state.config, ...Object.fromEntries(sharedKeys.map((key) => [key, shared[key]])) } },
+    })),
+  }
 }
 
 export default function App() {
@@ -333,13 +382,14 @@ export default function App() {
       : tournament),
   }))
   const [theme, setTheme] = useState<ThemeMode>(() => {
-    const saved = localStorage.getItem(THEME_KEY) ?? LEGACY_THEME_KEYS.map((key) => localStorage.getItem(key)).find(Boolean)
+    const saved = localStorage.getItem(THEME_KEY)
     return saved === 'light' || saved === 'dark' || saved === 'system' ? saved : 'system'
   })
   const [view, setView] = useState<View>('design')
   const [teamTexts, setTeamTexts] = useState<Record<string, string>>({})
   const [teamErrors, setTeamErrors] = useState<Record<string, string>>({})
   const [editingMatch, setEditingMatch] = useState<{ tournamentId: string; match: Match } | null>(null)
+  const importInputRef = useRef<HTMLInputElement>(null)
   const { config, teams, matches, selectedFormat, phases } = state
   const teamText = teamTexts[activeWorkspace.id] ?? teams.map((team) => team.name).join('\n')
   const setTeamText = (value: string) => setTeamTexts((current) => ({ ...current, [activeWorkspace.id]: value }))
@@ -506,6 +556,47 @@ export default function App() {
 
   const hasStartedMatches = (workspaces: TournamentWorkspace[]) => workspaces.some((tournament) => tournament.state.matches.some((match) => match.status !== 'scheduled'))
   const confirmReset = (workspaces: TournamentWorkspace[], message: string) => !hasStartedMatches(workspaces) || window.confirm(message)
+  const exportConfiguration = () => {
+    const file: ConfigurationFile = {
+      app: 'tournamanager',
+      version: 1,
+      tournaments: managerState.tournaments.map((tournament) => ({
+        label: tournament.label,
+        state: {
+          config: tournament.state.config,
+          teams: tournament.state.teams,
+          selectedFormat: tournament.state.selectedFormat,
+          phases: tournament.state.phases,
+        },
+      })),
+    }
+    const blob = new Blob([JSON.stringify(file, null, 2)], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    const fileName = config.name.trim().toLocaleLowerCase('it').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'torneo'
+    link.href = url
+    link.download = `${fileName}.tournamanager.json`
+    document.body.appendChild(link)
+    link.click()
+    link.remove()
+    window.setTimeout(() => URL.revokeObjectURL(url), 0)
+  }
+  const importConfiguration = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+    event.target.value = ''
+    if (!file) return
+    try {
+      const imported = readConfigurationFile(await file.text())
+      if (!window.confirm('Importare questa configurazione e sostituire quella corrente?')) return
+      setManagerState(imported)
+      setTeamTexts({})
+      setTeamErrors({})
+      setEditingMatch(null)
+      setView('design')
+    } catch {
+      window.alert('Il file selezionato non è una configurazione TournaManager valida.')
+    }
+  }
   const updateConfig = <K extends keyof TournamentConfig>(key: K, value: TournamentConfig[K]) => {
     const sharedKeys: Array<keyof TournamentConfig> = ['name', 'date', 'startTime', 'endTime', 'courts', 'phaseBreakMinutes']
     if (sharedKeys.includes(key)) {
@@ -699,6 +790,20 @@ export default function App() {
     } : tournament) }))
     setEditingMatch(null)
   }
+  const deleteMatchResult = (tournamentId: string, changedMatch: Match) => {
+    const workspace = managerState.tournaments.find((tournament) => tournament.id === tournamentId)
+    if (!workspace) return
+    const dependentIds = dependentMatchIds(workspace.state.matches, changedMatch)
+    const dependentWarning = dependentIds.size ? ` Verranno azzerate anche ${dependentIds.size} partite successive.` : ''
+    if (!window.confirm(`Sei sicuro di voler eliminare questo risultato?${dependentWarning}`)) return
+    setManagerState((current) => ({ ...current, tournaments: current.tournaments.map((tournament) => tournament.id === tournamentId ? {
+      ...tournament,
+      state: { ...tournament.state, matches: tournament.state.matches.map((match) => match.id === changedMatch.id || dependentIds.has(match.id)
+        ? { ...match, sets: [], status: 'scheduled' }
+        : match) },
+    } : tournament) }))
+    setEditingMatch(null)
+  }
   const resetDemo = () => {
     if (!confirmReset([activeWorkspace], 'Ripristinare la demo cancellerà calendario e risultati del torneo selezionato. Continuare?')) return
     const demoNames = demoTournamentTeamNames[activeTournamentIndex] ?? demoTeamNames
@@ -714,7 +819,7 @@ export default function App() {
     setEditingMatch(null)
   }
   const setTournamentCount = (count: number) => {
-    const nextCount = Math.max(1, Math.min(3, count))
+    const nextCount = Math.max(1, Math.round(count))
     if (nextCount === managerState.tournaments.length) return
     const removingData = nextCount < managerState.tournaments.length && managerState.tournaments.slice(nextCount).some((tournament) => tournament.state.teams.length || tournament.state.matches.length)
     const warning = removingData ? 'Riducendo il numero di tornei perderai definitivamente squadre, formula e risultati dei tornei rimossi. Continuare?' : 'Cambiare il numero di tornei richiede di rigenerare i calendari condivisi. Continuare?'
@@ -770,7 +875,7 @@ export default function App() {
 
   return <div className="app-shell">
     <aside className="sidebar">
-      <div className="brand"><span className="brand-mark"><Trophy size={21} /></span><span>Toruna<strong>Manager</strong></span></div>
+      <div className="brand"><span className="brand-mark"><Trophy size={21} /></span><span>Tourna<strong>Manager</strong></span></div>
       <nav>{navItems.map(({ id, label, icon: Icon }) => <button key={id} className={view === id ? 'active' : ''} onClick={() => setView(id)}><Icon size={19} /><span>{label}</span>{id === 'control' && matches.length > 0 && <b>{matches.length - completed}</b>}</button>)}</nav>
       <div className="sidebar-card">
         <span>Progresso torneo</span>
@@ -782,12 +887,17 @@ export default function App() {
     </aside>
 
     <main>{header}
-      <div className="tournament-bar"><span>Tornei paralleli</span><div>{managerState.tournaments.map((tournament, index) => <article className={tournament.id === activeWorkspace.id ? 'active' : ''} key={tournament.id}><button onClick={() => selectTournament(tournament.id)}><i />{tournament.label || `Torneo ${index + 1}`}<small>{tournament.state.matches.filter((match) => match.status === 'playing').length ? 'live' : `${tournament.state.teams.length} squadre`}</small></button>{managerState.tournaments.length > 1 && <button className="remove-tournament" aria-label={`Rimuovi ${tournament.label || `Torneo ${index + 1}`}`} title="Rimuovi torneo" onClick={() => removeTournament(tournament.id)}><Trash2 size={14} /></button>}</article>)}{managerState.tournaments.length < 3 && <button className="add-tournament" onClick={() => setTournamentCount(managerState.tournaments.length + 1)}><Plus size={14} /> Aggiungi torneo</button>}</div><small>{managerState.tournaments.length} simultane{managerState.tournaments.length === 1 ? 'o' : 'i'}</small></div>
+      <div className="tournament-bar"><span>Tornei paralleli</span><div>{managerState.tournaments.map((tournament, index) => <article className={tournament.id === activeWorkspace.id ? 'active' : ''} key={tournament.id}><button onClick={() => selectTournament(tournament.id)}><i />{tournament.label || `Torneo ${index + 1}`}<small>{tournament.state.matches.filter((match) => match.status === 'playing').length ? 'live' : `${tournament.state.teams.length} squadre`}</small></button>{managerState.tournaments.length > 1 && <button className="remove-tournament" aria-label={`Rimuovi ${tournament.label || `Torneo ${index + 1}`}`} title="Rimuovi torneo" onClick={() => removeTournament(tournament.id)}><Trash2 size={14} /></button>}</article>)}<button className="add-tournament" onClick={() => setTournamentCount(managerState.tournaments.length + 1)}><Plus size={14} /> Aggiungi torneo</button></div><small>{managerState.tournaments.length} simultane{managerState.tournaments.length === 1 ? 'o' : 'i'}</small></div>
       {view === 'design' && <div className="page design-page">
         <section className="hero">
           <div><span className="pill">Configurazione</span><h2>Configura il torneo</h2><p>Imposta squadre, orari, campi e numero di partite.</p></div>
           <div className="hero-stats"><Metric value={teams.length} label="squadre" /><Metric value={config.courts} label="campi" /><Metric value={phases.length || '—'} label="fasi" /></div>
         </section>
+        <div className="configuration-transfer">
+          <input ref={importInputRef} type="file" accept="application/json,.json" onChange={importConfiguration} />
+          <button className="button secondary" onClick={() => importInputRef.current?.click()}><Upload size={16} /> Importa configurazione</button>
+          <button className="button secondary" onClick={exportConfiguration}><Download size={16} /> Esporta configurazione</button>
+        </div>
 
         <div className="two-columns">
           <section className="panel setup-panel">
@@ -795,11 +905,11 @@ export default function App() {
             <div className="form-grid">
               <label className="field wide"><span>Nome torneo</span><input value={config.name} onChange={(event) => updateConfig('name', event.target.value)} /></label>
               <label className="field"><span>Data</span><input type="date" value={config.date} onChange={(event) => updateConfig('date', event.target.value)} /></label>
-              <label className="field"><span>Numero di tornei</span><select value={managerState.tournaments.length} onChange={(event) => setTournamentCount(Number(event.target.value))}><option value="1">1 torneo</option><option value="2">2 tornei</option><option value="3">3 tornei</option></select></label>
-              <label className="field"><span>Campi disponibili</span><input type="number" min="1" max={MAX_COURTS} value={config.courts} onChange={(event) => updateConfig('courts', clampInteger(Number(event.target.value), 1, MAX_COURTS))} /></label>
+              <NumberField label="Numero di tornei" value={managerState.tournaments.length} onChange={setTournamentCount} min={1} />
+              <NumberField label="Campi disponibili" value={config.courts} onChange={(value) => updateConfig('courts', value)} min={1} max={MAX_COURTS} />
               <label className="field"><span>Inizio</span><input type="time" value={config.startTime} onChange={(event) => updateConfig('startTime', event.target.value)} /></label>
               <label className="field"><span>Fine</span><input type="time" value={config.endTime} onChange={(event) => updateConfig('endTime', event.target.value)} /></label>
-              <label className="field"><span>Pausa comune tra le fasi (min)</span><input type="number" min="0" max="240" value={config.phaseBreakMinutes} onChange={(event) => updateConfig('phaseBreakMinutes', clampInteger(Number(event.target.value), 0, 240))} /></label>
+              <NumberField label="Pausa tra le fasi" value={config.phaseBreakMinutes} onChange={(value) => updateConfig('phaseBreakMinutes', value)} min={0} max={240} suffix="min" />
             </div>
             <div className="subsection"><div><h4>Torneo {activeTournamentIndex + 1} · formato delle partite</h4><p>Tipo, set e punti sono indipendenti per ciascun sotto-torneo</p></div></div>
             <label className="field subtournament-name"><span>Nome del sotto-torneo</span><input value={activeWorkspace.label} placeholder={`Torneo ${activeTournamentIndex + 1}`} onChange={(event) => updateTournamentLabel(event.target.value)} /></label>
@@ -808,7 +918,6 @@ export default function App() {
               <NumberField label="Set per partita" value={config.setsPerMatch} onChange={updateSetsPerMatch} min={1} max={MAX_SETS} />
             </div>
             <div className="set-points-grid">{normalizeSetPoints(config).map((points, index) => <NumberField key={index} label={`Punti set ${index + 1}`} value={points} onChange={(value) => updateSetPoints(index, value)} min={1} max={99} />)}</div>
-            <label className="check-field"><input type="checkbox" checked={config.winByTwo} onChange={(event) => updateConfig('winByTwo', event.target.checked)} /> Servono 2 punti di scarto per vincere il set</label>
             <div className="match-duration-estimate"><Clock3 size={16} /><span>Durata stimata per partita · {tournamentTypeLabels[config.tournamentType]}</span><strong>~{estimateMatchMinutes(config)} min</strong><small>{normalizeSetPoints(config).join(' + ')} punti · {tournamentPaceLabels[config.tournamentType]} · 3 min tra i set</small></div>
           </section>
 
@@ -832,7 +941,7 @@ export default function App() {
               <button className="button secondary" disabled={phases.length >= MAX_PHASES} onClick={addPhase}><Plus size={17} /> Aggiungi fase</button>
             </div>
             {teams.length > 1 && <div className={`efficiency-status ${parallelPreviewSchedules && managerState.tournaments.length > 1 ? 'multi' : ''} ${overTime || unequalParallelDuration ? 'warning' : 'ok'}`}>
-              <div><strong>{parallelPreviewSchedules ? totalPreviewMatchCount : customMatchCount}</strong><span>{parallelPreviewSchedules && managerState.tournaments.length > 1 ? 'partite complessive' : 'partite previste'}</span></div><div><strong>{formatMinute(activeEstimatedEndMinute)}</strong><span>fine {activeWorkspace.label || `torneo ${activeTournamentIndex + 1}`}</span></div>{parallelPreviewSchedules && managerState.tournaments.length > 1 && <div className={unequalParallelDuration ? 'end-mismatch' : ''}><strong>{formatMinute(estimatedEndMinute)}</strong><span>{unequalParallelDuration ? `fini diverse · ${endTimeDifference} min` : 'fine comune'}</span></div>}<div><strong>{config.endTime}</strong><span>ora limite</span></div><p>{overTime ? `Il calendario termina ${Math.floor(overtimeMinutes / 60) ? `${Math.floor(overtimeMinutes / 60)} h ` : ''}${overtimeMinutes % 60} min oltre l’orario. Le impostazioni evidenziate possono ridurre la durata.` : unequalParallelDuration ? `Le durate non sono allineate: ${earliestTournament?.label || 'un sotto-torneo'} termina ${endTimeDifference} min prima dell’ultimo. Riequilibra set, punti o formula finché le fini risultano uguali o molto vicine.` : parallelPreviewSchedules && managerState.tournaments.length > 1 ? `I sotto-tornei terminano insieme usando gli stessi ${config.courts} campi.` : `Il calendario termina entro l’orario previsto usando ${config.courts} ${config.courts === 1 ? 'campo' : 'campi'}.`}</p>
+              <div><strong>{parallelPreviewSchedules ? totalPreviewMatchCount : customMatchCount}</strong><span>{parallelPreviewSchedules && managerState.tournaments.length > 1 ? 'partite complessive' : 'partite previste'}</span></div><div><strong>{formatMinute(activeEstimatedEndMinute)}</strong><span>fine {activeWorkspace.label || `torneo ${activeTournamentIndex + 1}`}</span></div>{parallelPreviewSchedules && managerState.tournaments.length > 1 && <div className={unequalParallelDuration ? 'end-mismatch' : ''}><strong>{formatMinute(estimatedEndMinute)}</strong><span>{unequalParallelDuration ? `orari diversi · ${endTimeDifference} min` : 'fine comune'}</span></div>}<div><strong>{config.endTime}</strong><span>ora limite</span></div><p>{overTime ? `Il calendario supera l’orario di ${overtimeMinutes} minuti.` : unequalParallelDuration ? `${earliestTournament?.label || 'Un torneo'} termina ${endTimeDifference} minuti prima dell’ultimo.` : parallelPreviewSchedules && managerState.tournaments.length > 1 ? 'I tornei terminano insieme.' : 'Il calendario rientra nell’orario.'}</p>
             </div>}
             <div className="phase-editor-list">
               {phases.map((phase, index) => {
@@ -926,7 +1035,7 @@ export default function App() {
         {managedMatches.length > 0 && <LivePhaseOverview matches={matches} teams={teams} phases={phases} readyCourts={new Map(readyMatches.filter((entry) => entry.tournamentId === activeWorkspace.id).map((entry) => [entry.match.id, entry.availableCourt as number]))} suggestedMatchId={readyMatches.find((entry) => entry.tournamentId === activeWorkspace.id)?.match.id} onStart={(match) => startMatch(activeWorkspace.id, match.id)} onEdit={(match) => setEditingMatch({ tournamentId: activeWorkspace.id, match })} />}
       </div>}
     </main>
-    {editingMatch && editingWorkspace && <ResultEditor match={editingMatch.match} matches={editingWorkspace.state.matches} teams={editingWorkspace.state.teams} config={editingWorkspace.state.config} onClose={() => setEditingMatch(null)} onSave={(sets) => saveMatchResult(editingMatch.tournamentId, editingMatch.match, sets)} />}
+    {editingMatch && editingWorkspace && <ResultEditor match={editingMatch.match} matches={editingWorkspace.state.matches} teams={editingWorkspace.state.teams} config={editingWorkspace.state.config} onClose={() => setEditingMatch(null)} onSave={(sets) => saveMatchResult(editingMatch.tournamentId, editingMatch.match, sets)} onDelete={() => deleteMatchResult(editingMatch.tournamentId, editingMatch.match)} />}
   </div>
 }
 

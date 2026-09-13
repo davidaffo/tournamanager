@@ -1,4 +1,4 @@
-const CACHE = 'torunamanager-v3'
+const CACHE = 'tournamanager-v4'
 const appRoot = new URL('./', self.registration.scope).href
 
 self.addEventListener('install', (event) => {

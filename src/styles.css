@@ -80,6 +80,8 @@ main { min-width: 0; }
 .metric strong { font-size: 22px; font-weight: 800; letter-spacing: -.7px; }
 .metric span { color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: .7px; white-space: nowrap; }
 .hero .metric span { color: #8b9893; }
+.configuration-transfer { margin: -14px 0 14px; display: flex; justify-content: flex-end; gap: 8px; }
+.configuration-transfer input { display: none; }
 
 .two-columns { display: grid; grid-template-columns: 1.1fr .9fr; gap: 22px; align-items: stretch; }
 .panel { border: 1px solid var(--line); background: var(--card); border-radius: 17px; }
@@ -134,6 +136,7 @@ main { min-width: 0; }
 .button.dark { color: white; background: var(--ink); }
 .button.primary { color: var(--ink); background: var(--yellow); }
 .button.secondary { border: 1px solid var(--line); color: var(--ink); background: white; }
+.button.danger { margin-right: auto; border: 1px solid #dca28e; color: #96391f; background: #f9e4dc; }
 .button.light { color: var(--ink); background: white; }
 .icon-button { width: 31px; height: 31px; padding: 0; display: inline-grid; place-items: center; border: 0; border-radius: 8px; color: var(--muted); background: transparent; }
 .icon-button:hover { background: #ece9de; }
@@ -345,7 +348,7 @@ td:nth-child(2) { min-width: 150px; text-align: left; }
 .set-row input { height: 40px; width: 65px; text-align: center; border: 1px solid var(--line); border-radius: 8px; font-weight: 800; }
 .result-error { margin: 10px 0 0; color: #a33c31; font-size: 10px; font-weight: 700; }
 .result-rule { margin: 10px 0 0; color: var(--muted); font-size: 9px; line-height: 1.45; }
-.modal-actions { margin-top: 25px; padding-top: 17px; display: flex; justify-content: flex-end; gap: 8px; border-top: 1px solid var(--line); }
+.modal-actions { margin-top: 25px; padding-top: 17px; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; border-top: 1px solid var(--line); }
 
 :root[data-theme="dark"] {
   color-scheme: dark;
@@ -389,6 +392,7 @@ td:nth-child(2) { min-width: 150px; text-align: left; }
 :root[data-theme="dark"] .brand-mark,
 :root[data-theme="dark"] .button.primary,
 :root[data-theme="dark"] .theme-switch button.active { color: #111d1a; }
+:root[data-theme="dark"] .button.danger { color: #f0aa90; background: #3c251f; border-color: #744332; }
 :root[data-theme="dark"] .icon-button:hover { background: #29332f; }
 :root[data-theme="dark"] .live-dot { box-shadow: 0 0 0 4px #203b32; }
 :root[data-theme="dark"] .feasibility.warn { color: #f0a589; background: #49291f; }
@@ -442,6 +446,8 @@ td:nth-child(2) { min-width: 150px; text-align: left; }
   .hero { min-height: auto; padding: 28px 22px; display: block; }
   .hero-stats { margin: 25px -12px -8px; }
   .hero-stats .metric { min-width: 0; flex: 1; padding-inline: 8px; }
+  .configuration-transfer { margin-top: -14px; display: grid; grid-template-columns: 1fr 1fr; }
+  .configuration-transfer .button { padding-inline: 8px; }
   .form-grid { grid-template-columns: repeat(2, 1fr); }
   .finals-settings { grid-template-columns: 1fr; gap: 8px; }
   .field.wide { grid-column: span 2; }
