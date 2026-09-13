@@ -1,5 +1,4 @@
 import type { PublicSnapshot } from './publicSnapshot'
-import { serializePublicBridge } from './publicBridge'
 
 export type NextcloudCredentials = { baseUrl: string; username: string; password: string }
 export type NextcloudPublication = {
@@ -26,15 +25,6 @@ export function publicNextcloudDataUrl(baseUrl: string, shareUrl: string, token?
   const shareToken = token?.trim() || shareTokenFromUrl(shareUrl)
   if (!shareToken) throw new Error('Nextcloud non ha restituito un token pubblico valido.')
   return `${normalizeNextcloudBaseUrl(baseUrl)}/public.php/dav/files/${encodeURIComponent(shareToken)}`
-}
-
-export function normalizePublicNextcloudSource(source: string): string {
-  try {
-    const url = new URL(source)
-    const match = url.pathname.match(/^(.*?)\/(?:index\.php\/)?s\/([^/]+)\/download\/?$/)
-    if (!match) return source
-    return `${url.origin}${match[1]}/public.php/dav/files/${encodeURIComponent(decodeURIComponent(match[2]))}`
-  } catch { return source }
 }
 
 export function normalizeNextcloudBaseUrl(value: string): string {
@@ -113,8 +103,8 @@ async function ensureFolder(credentials: NextcloudCredentials, remotePath: strin
 async function upload(credentials: NextcloudCredentials, remotePath: string, snapshot: PublicSnapshot, create = false) {
   const response = await davFetch(credentials, davUrl(credentials, remotePath), {
     method: 'PUT',
-    headers: { 'Content-Type': 'application/javascript; charset=utf-8', ...(create ? { 'If-None-Match': '*' } : {}) },
-    body: serializePublicBridge(snapshot),
+    headers: { 'Content-Type': 'application/json; charset=utf-8', ...(create ? { 'If-None-Match': '*' } : {}) },
+    body: JSON.stringify(snapshot),
   })
   if (!response.ok) throw responseError(response.status)
 }

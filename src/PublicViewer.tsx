@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react'
 import { CircleDot, RefreshCw, Trophy } from 'lucide-react'
 import { formatMinute } from './engine/core'
-import { loadPublicBridge } from './publicBridge'
 import { publicSetResult, type PublicSnapshot } from './publicSnapshot'
 
 const validSnapshot = (value: unknown): value is PublicSnapshot => typeof value === 'object' && value !== null && (value as PublicSnapshot).app === 'tournamanager-live' && (value as PublicSnapshot).version === 1
@@ -21,7 +20,9 @@ export function PublicViewer({ source }: { source: string }) {
     const refresh = async () => {
       setLoading(true)
       try {
-        const value = await loadPublicBridge(source)
+        const response = await fetch(source, { mode: 'cors', cache: 'no-store' })
+        if (!response.ok) throw new Error(`Nextcloud ha risposto ${response.status}`)
+        const value: unknown = await response.json()
         if (!validSnapshot(value)) throw new Error('il file condiviso non contiene uno stato TournaManager valido')
         if (active) { setSnapshot(value); setError(''); setSelectedTournament((current) => current || value.tournaments[0]?.id || '') }
       } catch (error) {
