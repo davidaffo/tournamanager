@@ -889,13 +889,8 @@ export default function App() {
     </aside>
 
     <main>{header}
-      <div className="tournament-bar"><span>Tornei paralleli</span><div>{managerState.tournaments.map((tournament, index) => <article className={tournament.id === activeWorkspace.id ? 'active' : ''} key={tournament.id}><button onClick={() => selectTournament(tournament.id)}><i />{tournament.label || `Torneo ${index + 1}`}<small>{tournament.state.matches.filter((match) => match.status === 'playing').length ? 'live' : `${tournament.state.teams.length} squadre`}</small></button>{managerState.tournaments.length > 1 && <button className="remove-tournament" aria-label={`Rimuovi ${tournament.label || `Torneo ${index + 1}`}`} title="Rimuovi torneo" onClick={() => removeTournament(tournament.id)}><Trash2 size={14} /></button>}</article>)}<button className="add-tournament" onClick={() => setTournamentCount(managerState.tournaments.length + 1)}><Plus size={14} /> Aggiungi torneo</button></div><small>{managerState.tournaments.length} simultane{managerState.tournaments.length === 1 ? 'o' : 'i'}</small></div>
       {view === 'design' && <div className="page design-page">
-        <section className="hero">
-          <div><span className="pill">Configurazione</span><h2>Configura il torneo</h2><p>Imposta squadre, orari, campi e numero di partite.</p></div>
-          <div className="hero-stats"><Metric value={teams.length} label="squadre" /><Metric value={config.courts} label="campi" /><Metric value={phases.length || '—'} label="fasi" /></div>
-        </section>
-        <div className="configuration-transfer">
+                <div className="configuration-transfer">
           <input ref={importInputRef} type="file" accept="application/json,.json" onChange={importConfiguration} />
           <button className="button secondary" onClick={() => importInputRef.current?.click()}><Upload size={16} /> Importa configurazione</button>
           <button className="button secondary" onClick={exportConfiguration}><Download size={16} /> Esporta configurazione</button>
@@ -907,11 +902,14 @@ export default function App() {
             <div className="form-grid">
               <label className="field wide"><span>Nome torneo</span><input value={config.name} onChange={(event) => updateConfig('name', event.target.value)} /></label>
               <label className="field"><span>Data</span><input type="date" value={config.date} onChange={(event) => updateConfig('date', event.target.value)} /></label>
-              <NumberField label="Numero di tornei" value={managerState.tournaments.length} onChange={setTournamentCount} min={1} />
               <NumberField label="Campi disponibili" value={config.courts} onChange={(value) => updateConfig('courts', value)} min={1} max={MAX_COURTS} />
               <label className="field"><span>Inizio</span><input type="time" value={config.startTime} onChange={(event) => updateConfig('startTime', event.target.value)} /></label>
               <label className="field"><span>Fine</span><input type="time" value={config.endTime} onChange={(event) => updateConfig('endTime', event.target.value)} /></label>
               <NumberField label="Pausa tra le fasi" value={config.phaseBreakMinutes} onChange={(value) => updateConfig('phaseBreakMinutes', value)} min={0} max={240} suffix="min" />
+            </div>
+            <div className="tournament-switcher">
+              <header><div><h4>Tornei paralleli</h4><p>{managerState.tournaments.length} {managerState.tournaments.length === 1 ? 'torneo' : 'tornei'}</p></div><button className="add-tournament" onClick={() => setTournamentCount(managerState.tournaments.length + 1)}><Plus size={14} /> Aggiungi torneo</button></header>
+              <div>{managerState.tournaments.map((tournament, index) => <article className={tournament.id === activeWorkspace.id ? 'active' : ''} key={tournament.id}><button onClick={() => selectTournament(tournament.id)}><i />{tournament.label || `Torneo ${index + 1}`}<small>{tournament.state.matches.filter((match) => match.status === 'playing').length ? 'live' : `${tournament.state.teams.length} squadre`}</small></button>{managerState.tournaments.length > 1 && <button className="remove-tournament" aria-label={`Rimuovi ${tournament.label || `Torneo ${index + 1}`}`} title="Rimuovi torneo" onClick={() => removeTournament(tournament.id)}><Trash2 size={14} /></button>}</article>)}</div>
             </div>
             <div className="subsection"><div><h4>Torneo {activeTournamentIndex + 1} · formato delle partite</h4><p>Tipo, set e punti sono indipendenti per ciascun sotto-torneo</p></div></div>
             <label className="field subtournament-name"><span>Nome del sotto-torneo</span><input value={activeWorkspace.label} placeholder={`Torneo ${activeTournamentIndex + 1}`} onChange={(event) => updateTournamentLabel(event.target.value)} /></label>
@@ -924,7 +922,7 @@ export default function App() {
           </section>
 
           <section className="panel teams-panel">
-            <div className="section-title"><span>02</span><div><h3>Squadre partecipanti</h3><p>Una per riga, oppure incolla da Excel</p></div><b>{teams.length}</b></div>
+            <div className="section-title"><span>02</span><div><h3>Squadre partecipanti</h3><p>Una per riga</p></div><b>{teams.length}</b></div>
             <textarea value={teamText} onChange={(event) => setTeamText(event.target.value)} aria-label="Elenco squadre" />
             <div className="paste-footer"><span><ClipboardList size={16} /> Duplicati e righe vuote saranno rimossi</span><button className="button dark" onClick={importTeamText}><Users size={17} /> Importa elenco</button></div>
             {teamErrors[activeWorkspace.id] && <p className="phase-error">{teamErrors[activeWorkspace.id]}</p>}
