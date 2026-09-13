@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { createNextcloudPublication, destroyNextcloudPublication, normalizeNextcloudBaseUrl, publicNextcloudDataUrl, type NextcloudPublication } from './nextcloud'
+import { createNextcloudPublication, destroyNextcloudPublication, normalizeNextcloudBaseUrl, readNextcloudPublication, type NextcloudPublication } from './nextcloud'
 import type { PublicSnapshot } from './publicSnapshot'
 
 const snapshot: PublicSnapshot = {
@@ -16,32 +16,42 @@ describe('collegamento Nextcloud', () => {
     expect(normalizeNextcloudBaseUrl('https://cloud.example.it/nextcloud/remote.php/dav/files/mario')).toBe('https://cloud.example.it/nextcloud')
   })
 
-  it('usa il WebDAV pubblico della condivisione per leggere il JSON dal browser', () => {
-    expect(publicNextcloudDataUrl('https://cloud.example.it/nextcloud', 'https://cloud.example.it/nextcloud/index.php/s/abcDEF123')).toBe('https://cloud.example.it/nextcloud/public.php/dav/files/abcDEF123')
-  })
-
-  it('usa WebDAV CORS e l’API share di WebAppPassword', async () => {
+  it('usa WebDAV CORS e condivide il file in lettura con l’account pubblico', async () => {
     const fetchMock = vi.fn<typeof fetch>()
       .mockResolvedValueOnce(new Response(null, { status: 207 }))
       .mockResolvedValueOnce(new Response(null, { status: 404 }))
       .mockResolvedValueOnce(new Response(null, { status: 201 }))
       .mockResolvedValueOnce(new Response(null, { status: 201 }))
       .mockResolvedValueOnce(new Response(JSON.stringify({
-        ocs: { meta: { status: 'ok', statuscode: 100 }, data: { id: 42, token: 'pubblico', url: 'https://cloud.example.it/index.php/s/pubblico' } },
+        ocs: { meta: { status: 'ok', statuscode: 100 }, data: { id: 42, file_target: '/volley-day.json' } },
       }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
     vi.stubGlobal('fetch', fetchMock)
 
-    const publication = await createNextcloudPublication({ baseUrl: 'https://cloud.example.it/apps/files', username: 'mario', password: 'app-password' }, 'volley-day.json', snapshot)
+    const publication = await createNextcloudPublication({ baseUrl: 'https://cloud.example.it/apps/files', username: 'mario', password: 'app-password' }, 'lettore', 'volley-day.json', snapshot)
 
     expect(publication.remotePath).toBe('/TournaManager/volley-day.json')
-    expect(publication.publicDataUrl).toBe('https://cloud.example.it/public.php/dav/files/pubblico')
+    expect(publication.dataUrl).toBe('https://cloud.example.it/remote.php/dav/files/lettore/volley-day.json')
     expect(fetchMock).toHaveBeenCalledTimes(5)
     expect(String(fetchMock.mock.calls[4][0])).toBe('https://cloud.example.it/index.php/apps/webapppassword/api/v1/shares?format=json')
-    expect(String(fetchMock.mock.calls[4][1]?.body)).toContain('shareType=3')
+    expect(String(fetchMock.mock.calls[4][1]?.body)).toContain('shareType=0')
+    expect(String(fetchMock.mock.calls[4][1]?.body)).toContain('shareWith=lettore')
     expect(new Headers(fetchMock.mock.calls[0][1]?.headers).get('X-Requested-With')).toBe('XMLHttpRequest')
     expect(fetchMock.mock.calls[0][1]?.mode).toBe('cors')
     expect(new Headers(fetchMock.mock.calls[3][1]?.headers).get('Content-Type')).toContain('application/json')
     expect(JSON.parse(String(fetchMock.mock.calls[3][1]?.body))).toEqual(snapshot)
+  })
+
+  it('legge il JSON con le credenziali dell’account pubblico', async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValueOnce(new Response(JSON.stringify(snapshot), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+    const publication: NextcloudPublication = {
+      baseUrl: 'https://cloud.example.it', username: 'mario', remotePath: '/TournaManager/torneo.json', shareId: '42',
+      viewerUsername: 'lettore', viewerRemotePath: '/torneo.json', dataUrl: 'https://cloud.example.it/remote.php/dav/files/lettore/torneo.json',
+    }
+
+    await expect(readNextcloudPublication({ baseUrl: publication.baseUrl, username: 'lettore', password: 'password-pubblica' }, publication)).resolves.toEqual(snapshot)
+    expect(new Headers(fetchMock.mock.calls[0][1]?.headers).get('Authorization')).toMatch(/^Basic /)
+    expect(new Headers(fetchMock.mock.calls[0][1]?.headers).get('X-Requested-With')).toBe('XMLHttpRequest')
   })
 
   it('prova a eliminare il file anche se la rimozione della share fallisce', async () => {
@@ -51,7 +61,7 @@ describe('collegamento Nextcloud', () => {
     vi.stubGlobal('fetch', fetchMock)
     const publication: NextcloudPublication = {
       baseUrl: 'https://cloud.example.it', username: 'mario', remotePath: '/TournaManager/torneo.json',
-      shareId: '42', shareUrl: 'https://cloud.example.it/s/pubblico', publicDataUrl: 'https://cloud.example.it/s/pubblico/download',
+      shareId: '42', viewerUsername: 'lettore', viewerRemotePath: '/torneo.json', dataUrl: 'https://cloud.example.it/remote.php/dav/files/lettore/torneo.json',
     }
 
     const warnings = await destroyNextcloudPublication({ baseUrl: publication.baseUrl, username: 'mario', password: 'app-password' }, publication)

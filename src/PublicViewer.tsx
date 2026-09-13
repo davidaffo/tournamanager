@@ -7,6 +7,9 @@ const validSnapshot = (value: unknown): value is PublicSnapshot => typeof value 
 const REFRESH_COOLDOWN_MS = 15_000
 
 export function PublicViewer({ source }: { source: string }) {
+  const access = new URLSearchParams(window.location.hash.replace(/^#/, ''))
+  const viewerUsername = access.get('user') ?? ''
+  const viewerPassword = access.get('password') ?? ''
   const [snapshot, setSnapshot] = useState<PublicSnapshot | null>(null)
   const [error, setError] = useState('')
   const [selectedTournament, setSelectedTournament] = useState('')
@@ -20,7 +23,11 @@ export function PublicViewer({ source }: { source: string }) {
     const refresh = async () => {
       setLoading(true)
       try {
-        const response = await fetch(source, { mode: 'cors', cache: 'no-store' })
+        if (!viewerUsername || !viewerPassword) throw new Error('il link non contiene le credenziali dell’account pubblico')
+        const bytes = new TextEncoder().encode(`${viewerUsername}:${viewerPassword}`)
+        let binary = ''
+        bytes.forEach((byte) => { binary += String.fromCharCode(byte) })
+        const response = await fetch(source, { mode: 'cors', cache: 'no-store', headers: { Authorization: `Basic ${btoa(binary)}`, 'X-Requested-With': 'XMLHttpRequest' } })
         if (!response.ok) throw new Error(`Nextcloud ha risposto ${response.status}`)
         const value: unknown = await response.json()
         if (!validSnapshot(value)) throw new Error('il file condiviso non contiene uno stato TournaManager valido')
@@ -39,7 +46,7 @@ export function PublicViewer({ source }: { source: string }) {
     }
     refresh()
     return () => { active = false }
-  }, [source, refreshVersion])
+  }, [source, viewerUsername, viewerPassword, refreshVersion])
 
   useEffect(() => {
     if (cooldownUntil <= Date.now()) return

@@ -1,19 +1,19 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Check, Copy, Download, ExternalLink, Maximize2, RefreshCw, Trash2, Upload, X } from 'lucide-react'
 import QRCode from 'qrcode'
-import { createNextcloudPublication, destroyNextcloudPublication, publicNextcloudDataUrl, updateNextcloudPublication, type NextcloudPublication } from './nextcloud'
+import { createNextcloudPublication, destroyNextcloudPublication, readNextcloudPublication, updateNextcloudPublication, type NextcloudPublication } from './nextcloud'
 import type { PublicSnapshot } from './publicSnapshot'
 
-const STORAGE_KEY = 'tournamanager-nextcloud'
+const STORAGE_KEY = 'tournamanager-nextcloud-reader-v1'
 const DEV_LINK_TARGET_KEY = 'tournamanager-dev-link-target'
 const PAGES_URL = 'https://davidaffo.github.io/tournamanager/'
-type StoredSettings = { baseUrl: string; username: string; publication: NextcloudPublication | null }
+type StoredSettings = { baseUrl: string; username: string; viewerUsername: string; publication: NextcloudPublication | null }
 
 const loadSettings = (): StoredSettings => {
   try {
     const value = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? '') as StoredSettings
-    return { baseUrl: value.baseUrl ?? '', username: value.username ?? '', publication: value.publication ?? null }
-  } catch { return { baseUrl: '', username: '', publication: null } }
+    return { baseUrl: value.baseUrl ?? '', username: value.username ?? '', viewerUsername: value.viewerUsername ?? '', publication: value.publication ?? null }
+  } catch { return { baseUrl: '', username: '', viewerUsername: '', publication: null } }
 }
 
 const fileSlug = (value: string) => value.toLocaleLowerCase('it').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'torneo'
@@ -23,6 +23,8 @@ export function NextcloudPublisher({ snapshot }: { snapshot: PublicSnapshot }) {
   const [baseUrl, setBaseUrl] = useState(initial.baseUrl)
   const [username, setUsername] = useState(initial.username)
   const [password, setPassword] = useState('')
+  const [viewerUsername, setViewerUsername] = useState(initial.viewerUsername)
+  const [viewerPassword, setViewerPassword] = useState('')
   const [publication, setPublication] = useState<NextcloudPublication | null>(initial.publication)
   const [busy, setBusy] = useState(false)
   const [status, setStatus] = useState(initial.publication ? 'Inserisci la password per riprendere la sincronizzazione.' : '')
@@ -32,21 +34,19 @@ export function NextcloudPublisher({ snapshot }: { snapshot: PublicSnapshot }) {
   const [devLinkTarget, setDevLinkTarget] = useState<'pages' | 'local'>(() => localStorage.getItem(DEV_LINK_TARGET_KEY) === 'local' ? 'local' : 'pages')
 
   const credentials = { baseUrl, username, password }
+  const viewerCredentials = { baseUrl, username: viewerUsername, password: viewerPassword }
   const viewerUrl = useMemo(() => {
-    if (!publication) return ''
+    if (!publication || !viewerPassword) return ''
     const url = new URL(import.meta.env.DEV && devLinkTarget === 'pages' ? PAGES_URL : window.location.href)
     url.search = ''
-    url.hash = ''
-    let publicDataUrl = publication.publicDataUrl
-    try { publicDataUrl = publicNextcloudDataUrl(publication.baseUrl, publication.shareUrl) }
-    catch { /* Il valore salvato resta l'ultima risorsa utilizzabile. */ }
-    url.searchParams.set('live', publicDataUrl)
+    url.searchParams.set('live', publication.dataUrl)
+    url.hash = new URLSearchParams({ user: publication.viewerUsername, password: viewerPassword }).toString()
     return url.toString()
-  }, [publication, devLinkTarget])
+  }, [publication, viewerPassword, devLinkTarget])
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({ baseUrl, username, publication }))
-  }, [baseUrl, username, publication])
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ baseUrl, username, viewerUsername, publication }))
+  }, [baseUrl, username, viewerUsername, publication])
 
   useEffect(() => {
     if (import.meta.env.DEV) localStorage.setItem(DEV_LINK_TARGET_KEY, devLinkTarget)
@@ -87,12 +87,15 @@ export function NextcloudPublisher({ snapshot }: { snapshot: PublicSnapshot }) {
     setBusy(true); setStatus('Creazione del file pubblico…')
     try {
       const suffix = crypto.randomUUID().slice(0, 8)
-      const created = await createNextcloudPublication(credentials, `${fileSlug(snapshot.tournamentName)}-${suffix}.json`, snapshot)
+      const created = await createNextcloudPublication(credentials, viewerUsername, `${fileSlug(snapshot.tournamentName)}-${suffix}.json`, snapshot)
       setPublication(created)
       setBaseUrl(created.baseUrl)
       setUsername(created.username)
+      setViewerUsername(created.viewerUsername)
+      const received = await readNextcloudPublication(viewerCredentials, created)
+      if (received.app !== 'tournamanager-live' || received.version !== 1) throw new Error('L’account pubblico non ha ricevuto uno stato TournaManager valido.')
       setSynced(true)
-      setStatus('Pubblicazione attiva.')
+      setStatus('Pubblicazione attiva e accesso pubblico verificato.')
     } catch (error) {
       setStatus(error instanceof Error ? error.message : 'Pubblicazione Nextcloud non riuscita. Controlla anche la configurazione CORS del server.')
     } finally { setBusy(false) }
@@ -132,17 +135,19 @@ export function NextcloudPublisher({ snapshot }: { snapshot: PublicSnapshot }) {
     <header><div><span className="eyebrow">Pubblico</span><h3>Pubblicazione Nextcloud</h3><p>Partite in corso, risultati e classifiche aggiornati automaticamente.</p></div>{publication && <b className={synced ? 'online' : ''}><i /> {synced ? 'Sincronizzato' : 'Da collegare'}</b>}</header>
     <div className="nextcloud-fields">
       <label className="field"><span>Indirizzo Nextcloud</span><input type="url" placeholder="https://cloud.esempio.it" value={baseUrl} disabled={Boolean(publication)} onChange={(event) => setBaseUrl(event.target.value)} /></label>
-      <label className="field"><span>Nome utente</span><input autoComplete="username" value={username} disabled={Boolean(publication)} onChange={(event) => setUsername(event.target.value)} /></label>
-      <label className="field"><span>Password per app</span><input type="password" autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} /></label>
+      <label className="field"><span>Utente gestore</span><input autoComplete="username" value={username} disabled={Boolean(publication)} onChange={(event) => setUsername(event.target.value)} /></label>
+      <label className="field"><span>Password app gestore</span><input type="password" autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} /></label>
+      <label className="field"><span>Utente pubblico</span><input value={viewerUsername} disabled={Boolean(publication)} onChange={(event) => setViewerUsername(event.target.value)} /></label>
+      <label className="field"><span>Password app pubblica</span><input type="password" value={viewerPassword} onChange={(event) => setViewerPassword(event.target.value)} /></label>
     </div>
     {import.meta.env.DEV && <label className="field dev-link-target"><span>Destinazione del link pubblico e del QR</span><select value={devLinkTarget} onChange={(event) => setDevLinkTarget(event.target.value as 'pages' | 'local')}><option value="pages">GitHub Pages · apribile dagli smartphone</option><option value="local">Localhost · solo sviluppo locale</option></select></label>}
-    {!publication ? <div className="nextcloud-actions"><button className="button dark" disabled={busy || !baseUrl.trim() || !username.trim() || !password} onClick={publish}><Upload size={16} /> Crea pubblicazione</button></div> : <>
+    {!publication ? <div className="nextcloud-actions"><button className="button dark" disabled={busy || !baseUrl.trim() || !username.trim() || !password || !viewerUsername.trim() || !viewerPassword} onClick={publish}><Upload size={16} /> Crea pubblicazione</button></div> : <>
       <div className="publication-qr"><div>{qrCode ? <img src={qrCode} alt="QR code del torneo pubblico" /> : <RefreshCw className="spin" size={24} />}</div><section><h4>QR per il pubblico</h4><p>Inquadralo per aprire risultati e classifiche sullo smartphone.</p>{qrCode && <div className="qr-actions"><button className="button dark" onClick={() => setShowLargeQr(true)}><Maximize2 size={15} /> Mostra grande</button><a className="button secondary" href={qrCode} download={`${fileSlug(snapshot.tournamentName)}-qr.png`}><Download size={15} /> Scarica QR</a></div>}</section></div>
-      <div className="public-link"><label><span>Link per il pubblico</span><input readOnly value={viewerUrl} /></label><button className="button secondary" onClick={copyViewerUrl}><Copy size={15} /> Copia</button><a className="button secondary" href={viewerUrl} target="_blank" rel="noreferrer"><ExternalLink size={15} /> Apri</a></div>
+      {viewerUrl ? <div className="public-link"><label><span>Link per il pubblico</span><input readOnly value={viewerUrl} /></label><button className="button secondary" onClick={copyViewerUrl}><Copy size={15} /> Copia</button><a className="button secondary" href={viewerUrl} target="_blank" rel="noreferrer"><ExternalLink size={15} /> Apri</a></div> : <p className="nextcloud-status">Inserisci la password app pubblica per rigenerare link e QR.</p>}
       <div className="nextcloud-actions"><button className="button secondary" disabled={busy || !password} onClick={updateNow}><RefreshCw size={15} /> Aggiorna ora</button><button className="button danger" disabled={busy} onClick={destroy}><Trash2 size={15} /> Termina ed elimina il file</button></div>
     </>}
     {status && <p className="nextcloud-status">{synced && <Check size={13} />} {status}</p>}
-    <small>Indirizzo e utente vengono ricordati. La password non viene salvata. In WebAppPassword autorizza <code>{window.location.origin}</code> sia per WebDAV/CalDAV sia per Files sharing API.</small>
+    <small>Indirizzo e utenti vengono ricordati. Le password non vengono salvate. Il link e il QR contengono le credenziali dell’account pubblico: dagli accesso soltanto al file del torneo. In WebAppPassword autorizza <code>{window.location.origin}</code> sia per WebDAV/CalDAV sia per Files sharing API.</small>
     {showLargeQr && qrCode && <div className="qr-projector" role="dialog" aria-modal="true" aria-label="QR del torneo" onClick={() => setShowLargeQr(false)}><button aria-label="Chiudi QR" onClick={() => setShowLargeQr(false)}><X size={28} /></button><div onClick={(event) => event.stopPropagation()}><span>TournaManager</span><h2>{snapshot.tournamentName}</h2><img src={qrCode} alt="QR code del torneo pubblico ingrandito" /><p>Inquadra il QR per seguire risultati e classifiche</p></div></div>}
   </section>
 }

@@ -6,26 +6,14 @@ export type NextcloudPublication = {
   username: string
   remotePath: string
   shareId: string
-  shareUrl: string
-  publicDataUrl: string
+  viewerUsername: string
+  viewerRemotePath: string
+  dataUrl: string
 }
 
 type OcsMeta = { status?: string; statuscode?: number | string; message?: string }
 type OcsEnvelope<T> = { ocs?: { meta?: OcsMeta; data?: T } }
-type RawShare = { id?: number | string; token?: string; url?: string }
-
-const shareTokenFromUrl = (shareUrl: string): string => {
-  try {
-    const match = new URL(shareUrl).pathname.match(/\/(?:index\.php\/)?s\/([^/]+)/)
-    return match ? decodeURIComponent(match[1]) : ''
-  } catch { return '' }
-}
-
-export function publicNextcloudDataUrl(baseUrl: string, shareUrl: string, token?: string): string {
-  const shareToken = token?.trim() || shareTokenFromUrl(shareUrl)
-  if (!shareToken) throw new Error('Nextcloud non ha restituito un token pubblico valido.')
-  return `${normalizeNextcloudBaseUrl(baseUrl)}/public.php/dav/files/${encodeURIComponent(shareToken)}`
-}
+type RawShare = { id?: number | string; file_target?: string }
 
 export function normalizeNextcloudBaseUrl(value: string): string {
   let url: URL
@@ -160,8 +148,11 @@ const normalizeCredentials = (credentials: NextcloudCredentials): NextcloudCrede
   return { ...credentials, baseUrl, username }
 }
 
-export async function createNextcloudPublication(credentials: NextcloudCredentials, fileName: string, snapshot: PublicSnapshot): Promise<NextcloudPublication> {
+export async function createNextcloudPublication(credentials: NextcloudCredentials, viewerUsername: string, fileName: string, snapshot: PublicSnapshot): Promise<NextcloudPublication> {
   const connection = normalizeCredentials(credentials)
+  const reader = viewerUsername.trim()
+  if (!reader) throw new Error('Inserisci il nome utente dell’account pubblico.')
+  if (reader === connection.username) throw new Error('L’account pubblico deve essere diverso dall’account gestore.')
   const remotePath = `/TournaManager/${fileName}`
   await verifyCredentials(connection)
   await ensureFolder(connection, '/TournaManager')
@@ -170,23 +161,31 @@ export async function createNextcloudPublication(credentials: NextcloudCredentia
     const data = await sharingFetch<RawShare>(connection, `${sharingUrl(connection)}?format=json`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' },
-      body: new URLSearchParams({ path: remotePath, shareType: '3', permissions: '1' }),
+      body: new URLSearchParams({ path: remotePath, shareType: '0', shareWith: reader, permissions: '1' }),
     })
     if (data.id === undefined) throw new Error('Nextcloud ha creato una condivisione non riconoscibile.')
-    const shareUrl = data.url?.trim() || (data.token ? `${connection.baseUrl}/index.php/s/${encodeURIComponent(data.token)}` : '')
-    if (!shareUrl) throw new Error('Nextcloud non ha restituito il collegamento pubblico.')
+    const viewerRemotePath = data.file_target?.trim() || `/${fileName}`
     return {
       baseUrl: connection.baseUrl,
       username: connection.username,
       remotePath,
       shareId: String(data.id),
-      shareUrl,
-      publicDataUrl: publicNextcloudDataUrl(connection.baseUrl, shareUrl, data.token),
+      viewerUsername: reader,
+      viewerRemotePath,
+      dataUrl: `${connection.baseUrl}/remote.php/dav/files/${encodeURIComponent(reader)}/${encodedPath(viewerRemotePath)}`,
     }
   } catch (error) {
     await davFetch(connection, davUrl(connection, remotePath), { method: 'DELETE' }).catch(() => undefined)
     throw error
   }
+}
+
+export async function readNextcloudPublication(credentials: NextcloudCredentials, publication: NextcloudPublication): Promise<PublicSnapshot> {
+  const connection = normalizeCredentials({ ...credentials, baseUrl: publication.baseUrl, username: publication.viewerUsername })
+  const response = await davFetch(connection, publication.dataUrl, { method: 'GET' })
+  if (!response.ok) throw responseError(response.status)
+  try { return await response.json() as PublicSnapshot }
+  catch { throw new Error('Il file condiviso non contiene un JSON valido.') }
 }
 
 export const updateNextcloudPublication = (credentials: NextcloudCredentials, publication: NextcloudPublication, snapshot: PublicSnapshot) => {
