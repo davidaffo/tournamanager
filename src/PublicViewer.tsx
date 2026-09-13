@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { CircleDot, RefreshCw, Trophy } from 'lucide-react'
 import { formatMinute } from './engine/core'
+import { normalizePublicNextcloudSource } from './nextcloud'
 import { publicSetResult, type PublicSnapshot } from './publicSnapshot'
 
 const validSnapshot = (value: unknown): value is PublicSnapshot => typeof value === 'object' && value !== null && (value as PublicSnapshot).app === 'tournamanager-live' && (value as PublicSnapshot).version === 1
@@ -14,13 +15,14 @@ export function PublicViewer({ source }: { source: string }) {
     let active = true
     const refresh = async () => {
       try {
-        const response = await fetch(source, { mode: 'cors', cache: 'no-store' })
-        if (!response.ok) throw new Error(`Errore ${response.status}`)
+        const response = await fetch(normalizePublicNextcloudSource(source), { mode: 'cors', cache: 'no-store' })
+        if (!response.ok) throw new Error(`Nextcloud ha risposto ${response.status}`)
         const value: unknown = await response.json()
-        if (!validSnapshot(value)) throw new Error('File non valido')
+        if (!validSnapshot(value)) throw new Error('il file condiviso non contiene uno stato TournaManager valido')
         if (active) { setSnapshot(value); setError(''); setSelectedTournament((current) => current || value.tournaments[0]?.id || '') }
-      } catch {
-        if (active) setError('Impossibile leggere lo stato del torneo. La condivisione potrebbe essere terminata oppure Nextcloud potrebbe bloccare la richiesta.')
+      } catch (error) {
+        const detail = error instanceof Error && error.message ? ` ${error.message}.` : ''
+        if (active) setError(`Impossibile leggere lo stato del torneo.${detail}`)
       }
     }
     refresh()

@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Check, Copy, Download, ExternalLink, Maximize2, RefreshCw, Trash2, Upload, X } from 'lucide-react'
 import QRCode from 'qrcode'
-import { createNextcloudPublication, destroyNextcloudPublication, updateNextcloudPublication, type NextcloudPublication } from './nextcloud'
+import { createNextcloudPublication, destroyNextcloudPublication, publicNextcloudDataUrl, updateNextcloudPublication, type NextcloudPublication } from './nextcloud'
 import type { PublicSnapshot } from './publicSnapshot'
 
 const STORAGE_KEY = 'tournamanager-nextcloud'
+const DEV_LINK_TARGET_KEY = 'tournamanager-dev-link-target'
+const PAGES_URL = 'https://davidaffo.github.io/tournamanager/'
 type StoredSettings = { baseUrl: string; username: string; publication: NextcloudPublication | null }
 
 const loadSettings = (): StoredSettings => {
@@ -27,20 +29,28 @@ export function NextcloudPublisher({ snapshot }: { snapshot: PublicSnapshot }) {
   const [synced, setSynced] = useState(false)
   const [qrCode, setQrCode] = useState('')
   const [showLargeQr, setShowLargeQr] = useState(false)
+  const [devLinkTarget, setDevLinkTarget] = useState<'pages' | 'local'>(() => localStorage.getItem(DEV_LINK_TARGET_KEY) === 'local' ? 'local' : 'pages')
 
   const credentials = { baseUrl, username, password }
   const viewerUrl = useMemo(() => {
     if (!publication) return ''
-    const url = new URL(window.location.href)
+    const url = new URL(import.meta.env.DEV && devLinkTarget === 'pages' ? PAGES_URL : window.location.href)
     url.search = ''
     url.hash = ''
-    url.searchParams.set('live', publication.publicDataUrl)
+    let publicDataUrl = publication.publicDataUrl
+    try { publicDataUrl = publicNextcloudDataUrl(publication.baseUrl, publication.shareUrl) }
+    catch { /* Il valore salvato resta l'ultima risorsa utilizzabile. */ }
+    url.searchParams.set('live', publicDataUrl)
     return url.toString()
-  }, [publication])
+  }, [publication, devLinkTarget])
 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify({ baseUrl, username, publication }))
   }, [baseUrl, username, publication])
+
+  useEffect(() => {
+    if (import.meta.env.DEV) localStorage.setItem(DEV_LINK_TARGET_KEY, devLinkTarget)
+  }, [devLinkTarget])
 
   useEffect(() => {
     let active = true
@@ -100,11 +110,16 @@ export function NextcloudPublisher({ snapshot }: { snapshot: PublicSnapshot }) {
 
   const destroy = async () => {
     if (!publication || !window.confirm('Terminare la pubblicazione ed eliminare definitivamente il file da Nextcloud?')) return
+    const target = publication
+    setPublication(null)
+    setSynced(false)
     setBusy(true); setStatus('Eliminazione della pubblicazione…')
     try {
-      await destroyNextcloudPublication(credentials, publication)
-      setPublication(null); setSynced(false); setStatus('File e condivisione eliminati da Nextcloud.')
-    } catch (error) { setStatus(error instanceof Error ? error.message : 'Eliminazione non riuscita.') }
+      const warnings = await destroyNextcloudPublication(credentials, target)
+      setStatus(warnings.length ? `Pubblicazione rimossa dall’app. Nextcloud segnala: ${warnings.join(' ')}` : 'File e condivisione eliminati da Nextcloud.')
+    } catch (error) {
+      setStatus(`Pubblicazione rimossa dall’app. ${error instanceof Error ? error.message : 'Non è stato possibile verificare la pulizia su Nextcloud.'}`)
+    }
     finally { setBusy(false) }
   }
 
@@ -120,10 +135,11 @@ export function NextcloudPublisher({ snapshot }: { snapshot: PublicSnapshot }) {
       <label className="field"><span>Nome utente</span><input autoComplete="username" value={username} disabled={Boolean(publication)} onChange={(event) => setUsername(event.target.value)} /></label>
       <label className="field"><span>Password per app</span><input type="password" autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} /></label>
     </div>
+    {import.meta.env.DEV && <label className="field dev-link-target"><span>Destinazione del link pubblico e del QR</span><select value={devLinkTarget} onChange={(event) => setDevLinkTarget(event.target.value as 'pages' | 'local')}><option value="pages">GitHub Pages · apribile dagli smartphone</option><option value="local">Localhost · solo sviluppo locale</option></select></label>}
     {!publication ? <div className="nextcloud-actions"><button className="button dark" disabled={busy || !baseUrl.trim() || !username.trim() || !password} onClick={publish}><Upload size={16} /> Crea pubblicazione</button></div> : <>
       <div className="publication-qr"><div>{qrCode ? <img src={qrCode} alt="QR code del torneo pubblico" /> : <RefreshCw className="spin" size={24} />}</div><section><h4>QR per il pubblico</h4><p>Inquadralo per aprire risultati e classifiche sullo smartphone.</p>{qrCode && <div className="qr-actions"><button className="button dark" onClick={() => setShowLargeQr(true)}><Maximize2 size={15} /> Mostra grande</button><a className="button secondary" href={qrCode} download={`${fileSlug(snapshot.tournamentName)}-qr.png`}><Download size={15} /> Scarica QR</a></div>}</section></div>
       <div className="public-link"><label><span>Link per il pubblico</span><input readOnly value={viewerUrl} /></label><button className="button secondary" onClick={copyViewerUrl}><Copy size={15} /> Copia</button><a className="button secondary" href={viewerUrl} target="_blank" rel="noreferrer"><ExternalLink size={15} /> Apri</a></div>
-      <div className="nextcloud-actions"><button className="button secondary" disabled={busy || !password} onClick={updateNow}><RefreshCw size={15} /> Aggiorna ora</button><button className="button danger" disabled={busy || !password} onClick={destroy}><Trash2 size={15} /> Termina ed elimina il file</button></div>
+      <div className="nextcloud-actions"><button className="button secondary" disabled={busy || !password} onClick={updateNow}><RefreshCw size={15} /> Aggiorna ora</button><button className="button danger" disabled={busy} onClick={destroy}><Trash2 size={15} /> Termina ed elimina il file</button></div>
     </>}
     {status && <p className="nextcloud-status">{synced && <Check size={13} />} {status}</p>}
     <small>Indirizzo e utente vengono ricordati. La password non viene salvata. In WebAppPassword autorizza <code>{window.location.origin}</code> sia per WebDAV/CalDAV sia per Files sharing API.</small>

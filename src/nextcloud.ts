@@ -14,6 +14,28 @@ type OcsMeta = { status?: string; statuscode?: number | string; message?: string
 type OcsEnvelope<T> = { ocs?: { meta?: OcsMeta; data?: T } }
 type RawShare = { id?: number | string; token?: string; url?: string }
 
+const shareTokenFromUrl = (shareUrl: string): string => {
+  try {
+    const match = new URL(shareUrl).pathname.match(/\/(?:index\.php\/)?s\/([^/]+)/)
+    return match ? decodeURIComponent(match[1]) : ''
+  } catch { return '' }
+}
+
+export function publicNextcloudDataUrl(baseUrl: string, shareUrl: string, token?: string): string {
+  const shareToken = token?.trim() || shareTokenFromUrl(shareUrl)
+  if (!shareToken) throw new Error('Nextcloud non ha restituito un token pubblico valido.')
+  return `${normalizeNextcloudBaseUrl(baseUrl)}/public.php/dav/files/${encodeURIComponent(shareToken)}`
+}
+
+export function normalizePublicNextcloudSource(source: string): string {
+  try {
+    const url = new URL(source)
+    const match = url.pathname.match(/^(.*?)\/(?:index\.php\/)?s\/([^/]+)\/download\/?$/)
+    if (!match) return source
+    return `${url.origin}${match[1]}/public.php/dav/files/${encodeURIComponent(decodeURIComponent(match[2]))}`
+  } catch { return source }
+}
+
 export function normalizeNextcloudBaseUrl(value: string): string {
   let url: URL
   try { url = new URL(value.trim()) }
@@ -115,6 +137,7 @@ async function sharingFetch<T>(credentials: NextcloudCredentials, url: string, i
     throw new Error('L’API condivisioni di WebAppPassword non è raggiungibile. Autorizza l’origine di TournaManager anche in “Files sharing API”.')
   }
   if (!response.ok) {
+    if (dataOptional && response.status === 404) return undefined as T
     if (response.status === 404) throw new Error('L’API condivisioni di WebAppPassword non è disponibile su questo Nextcloud.')
     throw responseError(response.status)
   }
@@ -128,7 +151,10 @@ async function sharingFetch<T>(credentials: NextcloudCredentials, url: string, i
   catch { throw new Error('Nextcloud non ha restituito una risposta OCS valida.') }
   const meta = envelope.ocs?.meta
   const statusCode = Number(meta?.statuscode ?? response.status)
-  if (meta?.status === 'failure' || statusCode >= 400) throw new Error(meta?.message?.trim() || responseError(statusCode).message)
+  if (meta?.status === 'failure' || statusCode >= 400) {
+    if (dataOptional && statusCode === 404) return undefined as T
+    throw new Error(meta?.message?.trim() || responseError(statusCode).message)
+  }
   if (envelope.ocs?.data === undefined) {
     if (dataOptional) return undefined as T
     throw new Error('La risposta OCS di Nextcloud non contiene i dati richiesti.')
@@ -158,7 +184,14 @@ export async function createNextcloudPublication(credentials: NextcloudCredentia
     if (data.id === undefined) throw new Error('Nextcloud ha creato una condivisione non riconoscibile.')
     const shareUrl = data.url?.trim() || (data.token ? `${connection.baseUrl}/index.php/s/${encodeURIComponent(data.token)}` : '')
     if (!shareUrl) throw new Error('Nextcloud non ha restituito il collegamento pubblico.')
-    return { baseUrl: connection.baseUrl, username: connection.username, remotePath, shareId: String(data.id), shareUrl, publicDataUrl: `${shareUrl.replace(/\/$/, '')}/download` }
+    return {
+      baseUrl: connection.baseUrl,
+      username: connection.username,
+      remotePath,
+      shareId: String(data.id),
+      shareUrl,
+      publicDataUrl: publicNextcloudDataUrl(connection.baseUrl, shareUrl, data.token),
+    }
   } catch (error) {
     await davFetch(connection, davUrl(connection, remotePath), { method: 'DELETE' }).catch(() => undefined)
     throw error
@@ -170,9 +203,19 @@ export const updateNextcloudPublication = (credentials: NextcloudCredentials, pu
   return upload(connection, publication.remotePath, snapshot)
 }
 
-export async function destroyNextcloudPublication(credentials: NextcloudCredentials, publication: NextcloudPublication) {
+export async function destroyNextcloudPublication(credentials: NextcloudCredentials, publication: NextcloudPublication): Promise<string[]> {
   const connection = normalizeCredentials({ ...credentials, baseUrl: publication.baseUrl, username: publication.username })
-  await sharingFetch<unknown>(connection, `${sharingUrl(connection, publication.shareId)}?format=json`, { method: 'DELETE' }, true)
-  const response = await davFetch(connection, davUrl(connection, publication.remotePath), { method: 'DELETE' })
-  if (!response.ok && response.status !== 404) throw responseError(response.status)
+  const warnings: string[] = []
+  try {
+    await sharingFetch<unknown>(connection, `${sharingUrl(connection, publication.shareId)}?format=json`, { method: 'DELETE' }, true)
+  } catch (error) {
+    warnings.push(error instanceof Error ? error.message : 'Impossibile eliminare la condivisione remota.')
+  }
+  try {
+    const response = await davFetch(connection, davUrl(connection, publication.remotePath), { method: 'DELETE' })
+    if (!response.ok && response.status !== 404) throw responseError(response.status)
+  } catch (error) {
+    warnings.push(error instanceof Error ? error.message : 'Impossibile eliminare il file remoto.')
+  }
+  return warnings
 }

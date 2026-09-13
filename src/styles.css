@@ -326,6 +326,7 @@ td:nth-child(2) { min-width: 150px; text-align: left; }
 .nextcloud-panel header > b.online { color: var(--green); background: var(--mint); }
 .nextcloud-panel header > b.online i { background: #45a881; }
 .nextcloud-fields { display: grid; grid-template-columns: 1.4fr 1fr 1fr; gap: 10px; }
+.dev-link-target { width: min(390px, 100%); margin-top: 12px; }
 .nextcloud-actions { margin-top: 13px; display: flex; justify-content: flex-end; gap: 8px; }
 .publication-qr { margin-top: 14px; padding: 14px; display: flex; align-items: center; gap: 17px; border: 1px solid var(--line); border-radius: 12px; background: var(--paper); }
 .publication-qr > div { width: 142px; height: 142px; flex: 0 0 142px; display: grid; place-items: center; border-radius: 9px; background: white; overflow: hidden; }
