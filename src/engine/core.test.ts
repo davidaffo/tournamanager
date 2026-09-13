@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { alphabeticalLabel, calculateStandings, canStartOnSharedCourts, compareTournamentMatchPriority, dependentMatchIds, estimateMatchMinutes, formatMinute, generateMatches, generateParallelMatches, getKnockoutWinner, isBalancedKnockout, isPowerOfTwo, isValidSetScore, knockoutSizesUpTo, knockoutTeamCountsUpTo, parseTeams, resolveMatchesForStandings, resolveParticipantId, tournamentEndMinute } from './core'
+import { alphabeticalLabel, calculateStandings, canStartOnSharedCourts, compareTournamentMatchPriority, dependentMatchIds, ensureParallelSchedules, estimateMatchMinutes, formatMinute, generateMatches, generateParallelMatches, getKnockoutWinner, isBalancedKnockout, isPowerOfTwo, isValidSetScore, knockoutSizesUpTo, knockoutTeamCountsUpTo, parseTeams, resetMatchProgress, resolveMatchesForStandings, resolveParticipantId, tournamentEndMinute } from './core'
 import type { TournamentConfig } from './types'
 
 const config: TournamentConfig = {
@@ -298,6 +298,34 @@ describe('tournament engine', () => {
     secondTournament.forEach((second) => firstTournament.filter((first) => first.court === second.court).forEach((first) => {
       expect(second.endMinute <= first.startMinute || second.startMinute >= first.endMinute).toBe(true)
     }))
+  })
+
+  it('regenerates a missing parallel tournament without changing one already started', () => {
+    const phases = [{ id: 'p1', name: 'Gironi', format: 'groups' as const, groupCount: 1, groupComposition: 'strength' as const, groupLegs: 1 as const, advanceAll: true, advancingTeams: 4, thirdPlaceFinal: false }]
+    const teamsA = parseTeams('A1\nA2\nA3\nA4')
+    const teamsB = parseTeams('B1\nB2\nB3\nB4')
+    const existingB = generateMatches(teamsB, { ...config, courts: 2 }, 'groups', phases)
+      .map((match, index) => index === 0 ? { ...match, status: 'completed' as const, sets: [{ a: 21, b: 15 }, { a: 21, b: 18 }] } : match)
+    const schedules = ensureParallelSchedules([
+      { id: 'a', teams: teamsA, config: { ...config, courts: 2 }, phases, matches: [] },
+      { id: 'b', teams: teamsB, config: { ...config, courts: 2 }, phases, matches: existingB },
+    ])
+
+    expect(schedules.b).toEqual(existingB)
+    expect(schedules.a.length).toBeGreaterThan(0)
+    schedules.a.forEach((first) => existingB.filter((second) => first.court === second.court).forEach((second) => {
+      expect(first.endMinute <= second.startMinute || first.startMinute >= second.endMinute).toBe(true)
+    }))
+  })
+
+  it('resets results without changing the calendar structure', () => {
+    const teams = parseTeams('A\nB\nC\nD')
+    const matches = generateMatches(teams, config, 'groups').map((match, index) => index === 0
+      ? { ...match, status: 'completed' as const, sets: [{ a: 21, b: 15 }, { a: 21, b: 18 }] }
+      : match)
+    const reset = resetMatchProgress(matches)
+    expect(reset.every((match) => match.status === 'scheduled' && match.sets.length === 0)).toBe(true)
+    expect(reset.map(({ status: _status, sets: _sets, ...match }) => match)).toEqual(matches.map(({ status: _status, sets: _sets, ...match }) => match))
   })
 
   it('balances parallel tournaments by phase, completion ratio and phase length', () => {

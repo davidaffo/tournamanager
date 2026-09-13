@@ -487,6 +487,22 @@ export function generateMatches(teams: Team[], config: TournamentConfig, kind: F
   return scheduled
 }
 
+export function ensureParallelSchedules(entries: Array<{ id: string; teams: Team[]; config: TournamentConfig; phases: TournamentPhase[]; matches: Match[] }>): Record<string, Match[]> {
+  const hasStarted = entries.some((entry) => entry.matches.some((match) => match.status !== 'scheduled'))
+  if (!hasStarted) return generateParallelMatches(entries)
+
+  const result = Object.fromEntries(entries.map((entry) => [entry.id, entry.matches])) as Record<string, Match[]>
+  let occupiedMatches = entries.flatMap((entry) => entry.matches)
+  entries.filter((entry) => entry.matches.length === 0).forEach((entry) => {
+    const generated = generateMatches(entry.teams, entry.config, entry.phases[0]?.format ?? 'groups', entry.phases, occupiedMatches)
+    result[entry.id] = generated
+    occupiedMatches = [...occupiedMatches, ...generated]
+  })
+  return result
+}
+
+export const resetMatchProgress = (matches: Match[]): Match[] => matches.map((match) => ({ ...match, status: 'scheduled', sets: [] }))
+
 function ratio(won: number, lost: number) {
   if (lost === 0) return won > 0 ? Number.POSITIVE_INFINITY : 0
   return won / lost

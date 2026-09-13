@@ -3,11 +3,14 @@ import {
   Check, ChevronRight, CircleDot, ClipboardList, Clock3,
   Download, GitBranch, LayoutDashboard, MapPin, Monitor, Moon, Play, Plus, RotateCcw, Save, Settings2, Sun, Trash2, Trophy, Upload, Users, X,
 } from 'lucide-react'
-import { alphabeticalLabel, calculateStandings, canStartOnSharedCourts, compareTournamentMatchPriority, defaultGroupScoring, dependentMatchIds, estimateMatchMinutes, formatMinute, generateMatches, generateParallelMatches, getKnockoutWinner, getSetWinner, isBalancedKnockout, isValidSetScore, knockoutSizesUpTo, knockoutTeamCountsUpTo, normalizeGroupScoring, parseTeams, resolveMatchesForStandings, resolveParticipantId, toMinute, tournamentEndMinute } from './engine/core'
+import { alphabeticalLabel, calculateStandings, canStartOnSharedCourts, compareTournamentMatchPriority, defaultGroupScoring, dependentMatchIds, ensureParallelSchedules, estimateMatchMinutes, formatMinute, generateMatches, generateParallelMatches, getKnockoutWinner, getSetWinner, isBalancedKnockout, isValidSetScore, knockoutSizesUpTo, knockoutTeamCountsUpTo, normalizeGroupScoring, parseTeams, resetMatchProgress, resolveMatchesForStandings, resolveParticipantId, toMinute, tournamentEndMinute } from './engine/core'
 import { demoTeamNames, demoTournamentTeamNames } from './engine/demo'
 import type { FormatKind, GroupComposition, GroupScoringMode, Match, SetScore, Team, TournamentConfig, TournamentPhase, TournamentState, TournamentType } from './engine/types'
+import { NextcloudPublisher } from './NextcloudPublisher'
+import { PublicViewer } from './PublicViewer'
+import { buildPublicSnapshot } from './publicSnapshot'
 
-type View = 'design' | 'structure' | 'control'
+type View = 'design' | 'structure' | 'control' | 'publish'
 type ThemeMode = 'light' | 'dark' | 'system'
 type TournamentWorkspace = { id: string; label: string; state: TournamentState }
 type MultiTournamentState = { activeId: string; tournaments: TournamentWorkspace[] }
@@ -149,6 +152,7 @@ const navItems: Array<{ id: View; label: string; icon: typeof LayoutDashboard }>
   { id: 'design', label: 'Progetta', icon: LayoutDashboard },
   { id: 'structure', label: 'Struttura', icon: GitBranch },
   { id: 'control', label: 'Regia e classifiche', icon: CircleDot },
+  { id: 'publish', label: 'Pubblica', icon: Upload },
 ]
 
 function isFormulaValid(teamCount: number, phases: TournamentPhase[]) {
@@ -381,6 +385,11 @@ function readConfigurationFile(contents: string): MultiTournamentState {
 }
 
 export default function App() {
+  const liveSource = new URLSearchParams(window.location.search).get('live')
+  return liveSource ? <PublicViewer source={liveSource} /> : <ManagerApp />
+}
+
+function ManagerApp() {
   const [managerState, setManagerState] = useState<MultiTournamentState>(makeInitialWorkspaces)
   const activeWorkspace = managerState.tournaments.find((tournament) => tournament.id === managerState.activeId) ?? managerState.tournaments[0]
   const activeTournamentIndex = managerState.tournaments.findIndex((tournament) => tournament.id === activeWorkspace.id)
@@ -416,6 +425,7 @@ export default function App() {
     config: tournament.state.config,
   }))), [managerState.tournaments])
   const playingMatches = managedMatches.filter((entry) => entry.match.status === 'playing')
+  const publicSnapshot = useMemo(() => buildPublicSnapshot(managerState.tournaments), [managerState.tournaments])
   const phaseProgressByTournament = new Map(managerState.tournaments.map((tournament) => {
     const unfinishedPhaseIndex = tournament.state.phases.findIndex((phase) => tournament.state.matches.some((match) => match.phaseId === phase.id && match.status !== 'completed'))
     const phaseIndex = unfinishedPhaseIndex >= 0 ? unfinishedPhaseIndex : Math.max(0, tournament.state.phases.length - 1)
@@ -472,6 +482,7 @@ export default function App() {
     teams: tournament.state.teams,
     phases: tournament.state.phases,
   })))
+  const scheduleAvailability = managerState.tournaments.map((tournament) => tournament.state.matches.length).join(',')
   const parallelPreviewSchedules = useMemo(
     () => view === 'design' && allParallelReady ? generateParallelMatches(managerState.tournaments.map((tournament) => ({
       id: tournament.id,
@@ -563,12 +574,12 @@ export default function App() {
   useEffect(() => {
     if (!allParallelReady) return
     setManagerState((current) => {
-      if (current.tournaments.some((tournament) => tournament.state.matches.some((match) => match.status !== 'scheduled'))) return current
-      const schedules = generateParallelMatches(current.tournaments.map((tournament) => ({
+      const schedules = ensureParallelSchedules(current.tournaments.map((tournament) => ({
         id: tournament.id,
         teams: tournament.state.teams,
         config: tournament.state.config,
         phases: tournament.state.phases,
+        matches: tournament.state.matches,
       })))
       const unchanged = current.tournaments.every((tournament) => JSON.stringify(tournament.state.matches) === JSON.stringify(schedules[tournament.id] ?? []))
       if (unchanged) return current
@@ -580,7 +591,7 @@ export default function App() {
         })),
       }
     })
-  }, [allParallelReady, scheduleConfiguration])
+  }, [allParallelReady, scheduleConfiguration, scheduleAvailability])
 
   useEffect(() => {
     try { localStorage.setItem(MULTI_STATE_KEY, JSON.stringify(managerState)) } catch { /* keep the in-memory tournament usable */ }
@@ -598,6 +609,27 @@ export default function App() {
 
   const hasStartedMatches = (workspaces: TournamentWorkspace[]) => workspaces.some((tournament) => tournament.state.matches.some((match) => match.status !== 'scheduled'))
   const confirmReset = (workspaces: TournamentWorkspace[], message: string) => !hasStartedMatches(workspaces) || window.confirm(message)
+  const resetTournamentProgress = () => {
+    if (!window.confirm('Azzera tutte le partite e tutti i risultati? Configurazione, squadre e fasi resteranno invariate.')) return
+    setManagerState((current) => {
+      const ready = current.tournaments.every((tournament) => isFormulaValid(tournament.state.teams.length, tournament.state.phases))
+      const missingSchedule = current.tournaments.some((tournament) => tournament.state.matches.length === 0)
+      const schedules = ready && missingSchedule ? generateParallelMatches(current.tournaments.map((tournament) => ({
+        id: tournament.id,
+        teams: tournament.state.teams,
+        config: tournament.state.config,
+        phases: tournament.state.phases,
+      }))) : {}
+      return {
+        ...current,
+        tournaments: current.tournaments.map((tournament) => ({
+          ...tournament,
+          state: { ...tournament.state, matches: missingSchedule && ready ? schedules[tournament.id] ?? [] : resetMatchProgress(tournament.state.matches) },
+        })),
+      }
+    })
+    setEditingMatch(null)
+  }
   const exportConfiguration = () => {
     const file: ConfigurationFile = {
       app: 'tournamanager',
@@ -918,6 +950,7 @@ export default function App() {
       {view === 'design' && <div className="page design-page">
                 <div className="configuration-transfer">
           <input ref={importInputRef} type="file" accept="application/json,.json" onChange={importConfiguration} />
+          <button className="button danger" onClick={resetTournamentProgress}><RotateCcw size={16} /> Azzera torneo</button>
           <button className="button secondary" onClick={() => importInputRef.current?.click()}><Upload size={16} /> Importa configurazione</button>
           <button className="button secondary" onClick={exportConfiguration}><Download size={16} /> Esporta configurazione</button>
         </div>
@@ -1057,6 +1090,11 @@ export default function App() {
           <TournamentTabs tournaments={managerState.tournaments} activeId={activeWorkspace.id} suggestedId={suggestedMatch?.tournamentId} onSelect={selectTournament} />
         </>}
         {managedMatches.length > 0 && <LivePhaseOverview matches={matches} teams={teams} phases={phases} readyCourts={new Map(readyMatches.filter((entry) => entry.tournamentId === activeWorkspace.id).map((entry) => [entry.match.id, entry.availableCourt as number]))} suggestedMatchId={suggestedMatch?.tournamentId === activeWorkspace.id ? suggestedMatch.match.id : undefined} onStart={(match) => startMatch(activeWorkspace.id, match.id)} onEdit={(match) => setEditingMatch({ tournamentId: activeWorkspace.id, match })} />}
+      </div>}
+
+      {view === 'publish' && <div className="page publish-page">
+        <div className="page-heading"><div><span className="eyebrow">Pubblico</span><h2>Pubblica il torneo</h2><p>Crea e aggiorna la pagina pubblica tramite il tuo Nextcloud.</p></div></div>
+        <NextcloudPublisher snapshot={publicSnapshot} />
       </div>}
     </main>
     {editingMatch && editingWorkspace && <ResultEditor match={editingMatch.match} matches={editingWorkspace.state.matches} teams={editingWorkspace.state.teams} config={editingWorkspace.state.config} onClose={() => setEditingMatch(null)} onSave={(sets) => saveMatchResult(editingMatch.tournamentId, editingMatch.match, sets)} onDelete={() => deleteMatchResult(editingMatch.tournamentId, editingMatch.match)} />}
