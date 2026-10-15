@@ -531,13 +531,25 @@ describe('tournament engine', () => {
     expect(formatMinute(1500)).toBe('01:00 (+1g)')
   })
 
-  it('validates fixed-target and two-point-advantage set scores', () => {
-    expect(isValidSetScore({ a: 21, b: 20 }, 21, false)).toBe(true)
-    expect(isValidSetScore({ a: 22, b: 20 }, 21, false)).toBe(false)
-    expect(isValidSetScore({ a: 21, b: 20 }, 21, true)).toBe(false)
-    expect(isValidSetScore({ a: 22, b: 20 }, 21, true)).toBe(true)
-    expect(isValidSetScore({ a: 25, b: 20 }, 21, true)).toBe(false)
-    expect(isValidSetScore({ a: 25, b: 23 }, 21, true)).toBe(true)
+  it('accepts shortened sets and any unequal nonnegative integer scores', () => {
+    for (const set of [{ a: 8, b: 6 }, { a: 6, b: 8 }, { a: 21, b: 20 }, { a: 22, b: 20 }, { a: 25, b: 23 }, { a: 0, b: 1 }]) {
+      expect(isValidSetScore(set)).toBe(true)
+    }
+  })
+
+  it('rejects tied, missing and nonnumeric set scores', () => {
+    for (const set of [{ a: 0, b: 0 }, { a: 8, b: 8 }, { a: Number.NaN, b: 8 }, { a: 8, b: Number.NaN }, { a: -1, b: 8 }, { a: 1.5, b: 8 }]) {
+      expect(isValidSetScore(set)).toBe(false)
+    }
+  })
+
+  it('uses the higher score to rank and advance winners of shortened matches', () => {
+    const teams = parseTeams('A\nB')
+    const match = { ...generateMatches(teams, { ...config, groupCount: 1, finalTeams: 0 }, 'groups')[0], status: 'completed' as const, sets: [{ a: 6, b: 8 }] }
+    expect(getKnockoutWinner(match.sets)).toBe('b')
+    const standings = calculateStandings(teams, [match])
+    expect(standings[0].teamId).toBe(teams[1].id)
+    expect(standings[0].won).toBe(1)
   })
 
   it('always determines a knockout winner after valid tied sets', () => {

@@ -14,6 +14,19 @@ const phases: TournamentPhase[] = [{
 }]
 
 describe('public tournament snapshot', () => {
+  it('includes society names for consistent colors in the public view', () => {
+    const teams = parseTeams('Aurora Blu\nAurora Rossa\nFenice Blu\nFenice Rossa')
+    const matches = generateMatches(teams, config, 'groups', phases).map((match) => ({ ...match, status: 'completed' as const, sets: [{ a: 8, b: 6 }, { a: 9, b: 4 }] }))
+    const snapshot = buildPublicSnapshot([{ id: 'one', label: 'S3', color: '#c2410c', state: { config, teams, selectedFormat: 'groups', phases, matches } }])
+    expect(snapshot.tournaments[0].color).toBe('#c2410c')
+    expect(snapshot.clubs).toEqual(['Aurora', 'Fenice'])
+    for (const match of snapshot.results) {
+      expect(match.teamAClub).toBe(teams.find((team) => team.name === match.teamA)?.club)
+      expect(match.teamBClub).toBe(teams.find((team) => team.name === match.teamB)?.club)
+    }
+    for (const row of snapshot.standings[0].rows) expect(row.club).toBe(teams.find((team) => team.id === row.teamId)?.club)
+  })
+
   it('publishes live matches, results and standings but no suggested matches', () => {
     const teams = parseTeams('A\nB\nC')
     const generated = generateMatches(teams, config, 'groups', phases)
@@ -29,4 +42,3 @@ describe('public tournament snapshot', () => {
     expect(snapshot).not.toHaveProperty('upcoming')
   })
 })
-

@@ -524,12 +524,8 @@ export function getKnockoutWinner(sets: SetScore[]) {
   return lastSet.a > lastSet.b ? 'a' as const : 'b' as const
 }
 
-export function isValidSetScore(set: SetScore, target: number, winByTwo: boolean) {
-  if (!Number.isInteger(set.a) || !Number.isInteger(set.b) || set.a < 0 || set.b < 0 || set.a === set.b) return false
-  const winner = Math.max(set.a, set.b)
-  if (!winByTwo) return winner === target
-  const loser = Math.min(set.a, set.b)
-  return winner === target ? winner - loser >= 2 : loser >= target - 1 && winner - loser === 2
+export function isValidSetScore(set: SetScore) {
+  return Number.isInteger(set.a) && Number.isInteger(set.b) && set.a >= 0 && set.b >= 0 && set.a !== set.b
 }
 
 export function resolveParticipantId(source: string, matches: Match[]): string | undefined {

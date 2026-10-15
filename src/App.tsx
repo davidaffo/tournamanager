@@ -10,10 +10,14 @@ import { NextcloudPublisher } from './NextcloudPublisher'
 import { PublicViewer } from './PublicViewer'
 import { buildPublicSnapshot } from './publicSnapshot'
 import type { PointBalanceSuggestion } from './engine/pointSuggestions'
+import { scrollToTournament, TournamentRows } from './TournamentRows'
+import { MatchSetScores } from './MatchSetScores'
+import { ClubColorsProvider, TeamName } from './TeamName'
+import { tournamentColor, tournamentPalette, tournamentTheme } from './tournamentColors'
 
 type View = 'design' | 'structure' | 'control' | 'publish'
 type ThemeMode = 'light' | 'dark' | 'system'
-type TournamentWorkspace = { id: string; label: string; state: TournamentState }
+type TournamentWorkspace = { id: string; label: string; color?: string; state: TournamentState }
 type MultiTournamentState = { activeId: string; tournaments: TournamentWorkspace[] }
 type ManagedMatch = { tournamentId: string; tournamentLabel: string; match: Match; matches: Match[]; teams: Team[]; config: TournamentConfig }
 
@@ -109,6 +113,7 @@ const makeInitialWorkspaces = (): MultiTournamentState => {
         const tournaments = parsed.tournaments.map((tournament, tournamentIndex) => ({
           ...tournament,
           label: tournament.label ?? `Torneo ${tournamentIndex + 1}`,
+          color: tournamentColor(tournament.color, tournamentIndex),
           state: {
             ...tournament.state,
             config: normalizeConfig({ ...tournament.state.config, name: shared.name, date: shared.date, startTime: shared.startTime, endTime: shared.endTime, courts: shared.courts, phaseBreakMinutes: shared.phaseBreakMinutes }),
@@ -138,7 +143,7 @@ const makeInitialWorkspaces = (): MultiTournamentState => {
     } catch { /* use defaults */ }
   }
   const initial = makeInitialState()
-  return { activeId: 'tournament-1', tournaments: [{ id: 'tournament-1', label: 'Torneo 1', state: initial }] }
+  return { activeId: 'tournament-1', tournaments: [{ id: 'tournament-1', label: 'Torneo 1', color: tournamentColor(undefined), state: initial }] }
 }
 
 const makeBlankTournament = (sharedConfig: TournamentConfig, phases: TournamentPhase[], tournamentIndex: number): TournamentState => {
@@ -248,16 +253,20 @@ function Metric({ value, label, tone }: { value: string | number; label: string;
   return <div className={`metric ${tone ?? ''}`}><strong>{value}</strong><span>{label}</span></div>
 }
 
-function TournamentTabs({ tournaments, activeId, suggestedId, onSelect, onRemove }: { tournaments: TournamentWorkspace[]; activeId: string; suggestedId?: string; onSelect: (id: string) => void; onRemove?: (id: string) => void }) {
-  return <div className="tournament-tabs">{tournaments.map((tournament, index) => <article className={`${tournament.id === activeId ? 'active' : ''} ${tournament.id === suggestedId ? 'suggested' : ''}`} key={tournament.id}>
-    <button onClick={() => onSelect(tournament.id)}><i />{tournament.label || `Torneo ${index + 1}`}<small>{tournament.id === suggestedId && tournament.id !== activeId ? 'prossima partita' : tournament.state.matches.some((match) => match.status === 'playing') ? 'live' : `${tournament.state.teams.length} squadre`}</small></button>
+function TournamentTabs({ tournaments, activeId, suggestedId, onSelect, onRemove }: { tournaments: TournamentWorkspace[]; activeId?: string; suggestedId?: string; onSelect: (id: string) => void; onRemove?: (id: string) => void }) {
+  return <div className="tournament-tabs">{tournaments.map((tournament, index) => <article style={tournamentTheme(tournament.color, index)} className={`${tournament.id === activeId ? 'active' : ''} ${tournament.id === suggestedId ? 'suggested' : ''}`} key={tournament.id}>
+    <button onClick={() => onSelect(tournament.id)}><i />{tournament.label || `Torneo ${index + 1}`}<small>{tournament.id === suggestedId ? 'prossima partita' : tournament.state.matches.some((match) => match.status === 'playing') ? 'live' : `${tournament.state.teams.length} squadre`}</small></button>
     {onRemove && tournaments.length > 1 && <button className="remove-tournament" aria-label={`Rimuovi ${tournament.label || `Torneo ${index + 1}`}`} title="Rimuovi torneo" onClick={() => onRemove(tournament.id)}><Trash2 size={14} /></button>}
   </article>)}</div>
 }
 
 function TeamBadge({ team }: { team?: Team }) {
   if (!team) return <span className="team-name muted">Da definire</span>
-  return <span className="team-name"><i>{team.name.slice(0, 2).toUpperCase()}</i>{team.name}</span>
+  return <span className="team-name"><span><TeamName name={team.name} club={team.club} /></span></span>
+}
+
+function currentTournamentPhase({ phases, matches }: Pick<TournamentState, 'phases' | 'matches'>) {
+  return phases.find((phase) => matches.some((match) => match.phaseId === phase.id && match.status !== 'completed')) ?? phases.at(-1)
 }
 
 function participantLabel(source: string, matches: Match[], teamById: Map<string, Team>) {
@@ -281,11 +290,16 @@ function ParticipantBadge({ source, matches, teamById }: { source: string; match
 function ResultEditor({ match, matches, teams, config, onSave, onDelete, onClose }: { match: Match; matches: Match[]; teams: Team[]; config: TournamentConfig; onSave: (sets: SetScore[]) => void; onDelete: () => void; onClose: () => void }) {
   const modalRef = useRef<HTMLElement>(null)
   const targets = normalizeSetPoints(config)
-  const [sets, setSets] = useState<SetScore[]>(match.sets.length === config.setsPerMatch ? match.sets : targets.map((target, index) => ({ a: target, b: Math.max(0, target - 3 - index) })))
+  const [scoreInputs, setScoreInputs] = useState(() => targets.map((_, index) => ({
+    a: match.sets[index] ? String(match.sets[index].a) : '',
+    b: match.sets[index] ? String(match.sets[index].b) : '',
+  })))
+  const sets = scoreInputs.map((set) => ({ a: Number(set.a), b: Number(set.b) }))
+  const completeSets = sets.filter((_, index) => scoreInputs[index].a !== '' && scoreInputs[index].b !== '')
   const teamA = teams.find((team) => team.id === resolveParticipantId(match.teamAId, matches))
   const teamB = teams.find((team) => team.id === resolveParticipantId(match.teamBId, matches))
-  const result = getSetWinner(sets)
-  const knockoutWinner = getKnockoutWinner(sets)
+  const result = getSetWinner(completeSets)
+  const knockoutWinner = getKnockoutWinner(completeSets)
   useEffect(() => {
     const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null
     const handleKey = (event: KeyboardEvent) => {
@@ -301,9 +315,12 @@ function ResultEditor({ match, matches, teams, config, onSave, onDelete, onClose
     window.addEventListener('keydown', handleKey)
     return () => { window.removeEventListener('keydown', handleKey); previousFocus?.focus() }
   }, [onClose])
-  const setsValid = sets.length === config.setsPerMatch && sets.every((set, index) => isValidSetScore(set, targets[index], false))
+  const setsValid = completeSets.length === config.setsPerMatch && sets.every(isValidSetScore)
   const resultValid = setsValid && (Boolean(match.pool) || Boolean(knockoutWinner))
-  const update = (index: number, side: 'a' | 'b', value: number) => setSets((current) => current.map((set, i) => i === index ? { ...set, [side]: Number.isFinite(value) ? Math.max(0, Math.min(999, value)) : 0 } : set))
+  const update = (index: number, side: 'a' | 'b', value: string) => {
+    if (!/^\d{0,3}$/.test(value)) return
+    setScoreInputs((current) => current.map((set, i) => i === index ? { ...set, [side]: value } : set))
+  }
   return <div className="scrim" onMouseDown={onClose}>
     <section ref={modalRef} className="result-modal" role="dialog" aria-modal="true" aria-labelledby="result-editor-title" onMouseDown={(event) => event.stopPropagation()}>
       <button className="icon-button close" onClick={onClose} aria-label="Chiudi"><X size={20} /></button>
@@ -313,15 +330,15 @@ function ResultEditor({ match, matches, teams, config, onSave, onDelete, onClose
         <TeamBadge team={teamA} /><strong>{result.a} – {result.b}</strong><TeamBadge team={teamB} />
       </div>
       <div className="set-list">
-        {sets.map((set, index) => <div className="set-row" key={index}>
+        {scoreInputs.map((set, index) => <div className="set-row" key={index}>
           <span>Set {index + 1}</span>
-          <DraftIntegerInput autoFocus={index === 0} min={0} max={999} ariaLabel={`Punti ${teamA?.name} set ${index + 1}`} value={set.a} onCommit={(value) => update(index, 'a', value)} />
+          <input type="text" inputMode="numeric" pattern="[0-9]*" maxLength={3} autoFocus={index === 0} aria-label={`Punti ${teamA?.name} set ${index + 1}`} value={set.a} onChange={(event) => update(index, 'a', event.target.value)} />
           <span>–</span>
-          <DraftIntegerInput min={0} max={999} ariaLabel={`Punti ${teamB?.name} set ${index + 1}`} value={set.b} onCommit={(value) => update(index, 'b', value)} />
-          <small>Set a {targets[index]} punti</small>
+          <input type="text" inputMode="numeric" pattern="[0-9]*" maxLength={3} aria-label={`Punti ${teamB?.name} set ${index + 1}`} value={set.b} onChange={(event) => update(index, 'b', event.target.value)} />
+          <small>Previsti {targets[index]} punti</small>
         </div>)}
       </div>
-      {!setsValid && <p className="result-error">In ogni set vince chi raggiunge il punteggio configurato.</p>}
+      {!setsValid && <p className="result-error">Compila entrambi i punteggi di ogni set. Non sono ammessi set in parità.</p>}
       {!match.pool && <p className="result-rule">A parità di set passa chi ha più punti complessivi; poi chi ha vinto l’ultimo set.</p>}
       {!match.pool && setsValid && knockoutWinner && <p className="result-rule"><strong>Passa {knockoutWinner === 'a' ? teamA?.name : teamB?.name}.</strong></p>}
       <div className="modal-actions">
@@ -336,7 +353,7 @@ function ResultEditor({ match, matches, teams, config, onSave, onDelete, onClose
 type ConfigurationFile = {
   app: 'tournamanager'
   version: 1
-  tournaments: Array<{ label: string; state: Omit<TournamentState, 'matches'> }>
+  tournaments: Array<{ label: string; color?: string; state: Omit<TournamentState, 'matches'> }>
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null
@@ -375,6 +392,7 @@ function readConfigurationFile(contents: string): MultiTournamentState {
     return {
       id,
       label: typeof entry.label === 'string' && entry.label.trim() ? entry.label.trim() : `Torneo ${tournamentIndex + 1}`,
+      color: tournamentColor(entry.color, tournamentIndex),
       state: { config, teams, phases: enforceFinalGroupComposition(phases), selectedFormat: phases[0]?.format ?? 'groups', matches: [] },
     }
   })
@@ -421,7 +439,6 @@ function ManagerApp() {
   const occupiedMatches = useMemo(() => managerState.tournaments
     .filter((tournament) => tournament.id !== activeWorkspace.id && tournament.state.config.date === config.date)
     .flatMap((tournament) => tournament.state.matches), [managerState.tournaments, activeWorkspace.id, config.date])
-  const completed = matches.filter((match) => match.status === 'completed').length
   const managedMatches: ManagedMatch[] = useMemo(() => managerState.tournaments.flatMap((tournament, index) => tournament.state.matches.map((match) => ({
     tournamentId: tournament.id,
     tournamentLabel: tournament.label || `Torneo ${index + 1}`,
@@ -430,6 +447,9 @@ function ManagerApp() {
     teams: tournament.state.teams,
     config: tournament.state.config,
   }))), [managerState.tournaments])
+  const totalMatches = managedMatches.length
+  const completedMatches = managedMatches.filter((entry) => entry.match.status === 'completed').length
+  const overallProgress = totalMatches ? (completedMatches / totalMatches) * 100 : 0
   const playingMatches = managedMatches.filter((entry) => entry.match.status === 'playing')
   const publicSnapshot = useMemo(() => buildPublicSnapshot(managerState.tournaments), [managerState.tournaments])
   const phaseProgressByTournament = new Map(managerState.tournaments.map((tournament) => {
@@ -661,6 +681,7 @@ function ManagerApp() {
       version: 1,
       tournaments: managerState.tournaments.map((tournament) => ({
         label: tournament.label,
+        color: tournamentColor(tournament.color, managerState.tournaments.indexOf(tournament)),
         state: {
           config: tournament.state.config,
           teams: tournament.state.teams,
@@ -746,6 +767,9 @@ function ManagerApp() {
   }
   const updateTournamentLabel = (label: string) => setManagerState((current) => ({
     ...current, tournaments: current.tournaments.map((tournament) => tournament.id === current.activeId ? { ...tournament, label } : tournament),
+  }))
+  const updateTournamentColor = (color: string) => setManagerState((current) => ({
+    ...current, tournaments: current.tournaments.map((tournament) => tournament.id === current.activeId ? { ...tournament, color: tournamentColor(color) } : tournament),
   }))
   const importTeamText = () => {
     const nextTeams = parseTeams(teamText)
@@ -924,7 +948,7 @@ function ManagerApp() {
       while (tournaments.length < nextCount) {
         const id = `tournament-${Date.now()}-${tournaments.length}`
         const tournamentIndex = tournaments.length
-        tournaments.push({ id, label: `Torneo ${tournamentIndex + 1}`, state: makeBlankTournament(current.tournaments[0].state.config, current.tournaments[0].state.phases, tournamentIndex) })
+        tournaments.push({ id, label: `Torneo ${tournamentIndex + 1}`, color: tournamentColor(undefined, tournamentIndex), state: makeBlankTournament(current.tournaments[0].state.config, current.tournaments[0].state.phases, tournamentIndex) })
       }
       return { tournaments: tournaments.map((tournament) => ({ ...tournament, state: { ...tournament.state, matches: [] } })), activeId: tournaments.some((tournament) => tournament.id === current.activeId) ? current.activeId : tournaments[0].id }
     })
@@ -968,15 +992,15 @@ function ManagerApp() {
   </header>
   const editingWorkspace = editingMatch ? managerState.tournaments.find((tournament) => tournament.id === editingMatch.tournamentId) : undefined
 
-  return <div className="app-shell">
+  return <ClubColorsProvider clubs={managerState.tournaments.flatMap((tournament) => tournament.state.teams.map((team) => team.club))}><div className="app-shell">
     <aside className="sidebar">
       <div className="brand"><span className="brand-mark"><Trophy size={21} /></span><span>Tourna<strong>Manager</strong></span></div>
-      <nav>{navItems.map(({ id, label, icon: Icon }) => <button key={id} className={view === id ? 'active' : ''} onClick={() => setView(id)}><Icon size={19} /><span>{label}</span>{id === 'control' && matches.length > 0 && <b>{matches.length - completed}</b>}</button>)}</nav>
+      <nav>{navItems.map(({ id, label, icon: Icon }) => <button key={id} className={view === id ? 'active' : ''} onClick={() => setView(id)}><Icon size={19} /><span>{label}</span>{id === 'control' && totalMatches > 0 && <b>{totalMatches - completedMatches}</b>}</button>)}</nav>
       <div className="sidebar-card">
-        <span>Progresso torneo</span>
-        <strong>{matches.length ? Math.round((completed / matches.length) * 100) : 0}%</strong>
-        <div className="progress"><i style={{ width: `${matches.length ? (completed / matches.length) * 100 : 0}%` }} /></div>
-        <small>{completed} di {matches.length} partite concluse</small>
+        <span>Progresso complessivo</span>
+        <strong>{Math.round(overallProgress)}%</strong>
+        <div className="progress"><i style={{ width: `${overallProgress}%` }} /></div>
+        <small>{completedMatches} di {totalMatches} partite concluse · {managerState.tournaments.length} {managerState.tournaments.length === 1 ? 'torneo' : 'tornei'}</small>
       </div>
       {import.meta.env.DEV && <button className="reset-button" onClick={resetDemo}><RotateCcw size={16} /> Ripristina demo 24 squadre</button>}
     </aside>
@@ -1007,6 +1031,7 @@ function ManagerApp() {
             </div>
             <div className="subsection"><div><h4>Torneo {activeTournamentIndex + 1} · formato delle partite</h4><p>Tipo, set e punti sono indipendenti per ciascun sotto-torneo</p></div></div>
             <label className="field subtournament-name"><span>Nome del sotto-torneo</span><input value={activeWorkspace.label} placeholder={`Torneo ${activeTournamentIndex + 1}`} onChange={(event) => updateTournamentLabel(event.target.value)} /></label>
+            <fieldset className="tournament-color-field"><legend>Colore del torneo</legend><div className="tournament-palette">{tournamentPalette.map((entry) => <button type="button" key={entry.color} className="tournament-color-swatch" style={{ backgroundColor: entry.color }} aria-label={entry.name} aria-pressed={tournamentColor(activeWorkspace.color, activeTournamentIndex) === entry.color} title={entry.name} onClick={() => updateTournamentColor(entry.color)}>{tournamentColor(activeWorkspace.color, activeTournamentIndex) === entry.color && <Check size={17} />}</button>)}</div></fieldset>
             <div className="number-grid">
               <label className="field"><span>Tipo torneo</span><select value={config.tournamentType} onChange={(event) => updateTournamentType(event.target.value as TournamentType)}><option value="s3-red">S3 Red</option><option value="s3-green">S3 Green</option><option value="s3-white">S3 White</option><option value="6v6">6 contro 6</option></select></label>
               <NumberField label="Set per partita" value={config.setsPerMatch} onChange={updateSetsPerMatch} min={1} max={MAX_SETS} />
@@ -1023,7 +1048,7 @@ function ManagerApp() {
             {teams.length > 0 && <section className="club-editor">
               <header><div><h4>Società delle squadre</h4><p>Riconosciute dal nome. Correggile se necessario: nella prima fase verranno separate il più possibile.</p></div><span>{knownClubs.length} riconosciute</span></header>
               <datalist id="club-options">{knownClubs.map((club) => <option value={club} key={club} />)}</datalist>
-              <div>{teams.map((team) => <label key={team.id}><span>{team.name}</span><input list="club-options" value={team.club} placeholder="Nessuna società" onChange={(event) => updateTeamClub(team.id, event.target.value)} /></label>)}</div>
+              <div>{teams.map((team) => <label key={team.id}><span><TeamName name={team.name} club={team.club} /></span><input list="club-options" value={team.club} placeholder="Nessuna società" onChange={(event) => updateTeamClub(team.id, event.target.value)} /></label>)}</div>
             </section>}
           </section>
         </div>
@@ -1112,7 +1137,7 @@ function ManagerApp() {
       {view === 'structure' && <StructureView config={config} teams={teams} matches={matches} selectedFormat={selectedFormat} phases={phases} tournamentTabs={<TournamentTabs tournaments={managerState.tournaments} activeId={activeWorkspace.id} onSelect={selectTournament} />} onConfigure={() => setView('design')} onStart={() => setView('control')} />}
 
       {view === 'control' && <div className="page control-page">
-        <div className="page-heading"><div><span className="eyebrow live"><i /> Regia condivisa</span><h2>Gestione incontri</h2><p>Tutti i sotto-tornei e tutti i campi in un’unica vista.</p></div><div className="heading-metrics"><Metric value={`${managedMatches.filter((entry) => entry.match.status === 'completed').length}/${managedMatches.length}`} label="concluse" /><Metric value={playingMatches.length} label="in campo" /></div></div>
+        <div className="page-heading"><div><span className="eyebrow live"><i /> Regia condivisa</span><h2>Gestione incontri</h2><p>Tutti i sotto-tornei e tutti i campi in un’unica vista.</p></div><div className="heading-metrics"><Metric value={`${completedMatches}/${totalMatches}`} label="concluse" /><Metric value={playingMatches.length} label="in campo" /></div></div>
         {managedMatches.length === 0 ? <EmptyState icon={Play} title="Crea prima il torneo e il suo calendario" action={() => setView('design')} /> : <>
           <div className="live-courts">{Array.from({ length: config.courts }, (_, index) => index + 1).map((court) => {
             const activeOnCourt = playingMatches.filter((entry) => entry.match.court === court)
@@ -1127,9 +1152,12 @@ function ManagerApp() {
               })}</div> : <div className="free-court"><Check size={24} /><p>Pronto per la prossima partita</p></div>}
             </section>
           })}</div>
-          <TournamentTabs tournaments={managerState.tournaments} activeId={activeWorkspace.id} suggestedId={suggestedMatch?.tournamentId} onSelect={selectTournament} />
+          <TournamentTabs tournaments={managerState.tournaments} suggestedId={suggestedMatch?.tournamentId} onSelect={(id) => scrollToTournament('live-tournament', id)} />
         </>}
-        {managedMatches.length > 0 && <LivePhaseOverview matches={matches} teams={teams} phases={phases} readyCourts={new Map(readyMatches.filter((entry) => entry.tournamentId === activeWorkspace.id).map((entry) => [entry.match.id, entry.availableCourt as number]))} suggestedMatchId={suggestedMatch?.tournamentId === activeWorkspace.id ? suggestedMatch.match.id : undefined} onStart={(match) => startMatch(activeWorkspace.id, match.id)} onEdit={(match) => setEditingMatch({ tournamentId: activeWorkspace.id, match })} />}
+        {managedMatches.length > 0 && <TournamentRows tournaments={managerState.tournaments} prefix="live-tournament" headerContent={(_, index) => <><p>Fase attuale · {currentTournamentPhase(managerState.tournaments[index].state)?.name ?? 'Da configurare'}</p><p className="tournament-heading-note">Giallo: prossima partita suggerita.</p></>}>{(_, index) => {
+          const tournament = managerState.tournaments[index]
+          return <LivePhaseOverview matches={tournament.state.matches} teams={tournament.state.teams} phases={tournament.state.phases} readyCourts={new Map(readyMatches.filter((entry) => entry.tournamentId === tournament.id).map((entry) => [entry.match.id, entry.availableCourt as number]))} suggestedMatchId={suggestedMatch?.tournamentId === tournament.id ? suggestedMatch.match.id : undefined} onStart={(match) => startMatch(tournament.id, match.id)} onEdit={(match) => setEditingMatch({ tournamentId: tournament.id, match })} />
+        }}</TournamentRows>}
       </div>}
 
       {view === 'publish' && <div className="page publish-page">
@@ -1138,7 +1166,7 @@ function ManagerApp() {
       </div>}
     </main>
     {editingMatch && editingWorkspace && <ResultEditor match={editingMatch.match} matches={editingWorkspace.state.matches} teams={editingWorkspace.state.teams} config={editingWorkspace.state.config} onClose={() => setEditingMatch(null)} onSave={(sets) => saveMatchResult(editingMatch.tournamentId, editingMatch.match, sets)} onDelete={() => deleteMatchResult(editingMatch.tournamentId, editingMatch.match)} />}
-  </div>
+  </div></ClubColorsProvider>
 }
 
 function StructureView({ config, teams, matches, selectedFormat, phases, tournamentTabs, onConfigure, onStart }: { config: TournamentConfig; teams: Team[]; matches: Match[]; selectedFormat: FormatKind; phases: TournamentPhase[]; tournamentTabs: ReactNode; onConfigure: () => void; onStart: () => void }) {
@@ -1155,6 +1183,10 @@ function StructureView({ config, teams, matches, selectedFormat, phases, tournam
   })
   const groupPhase = phases.find((phase) => phase.format === 'groups')
   const effectiveFormat = phases[0]?.format ?? selectedFormat
+  const coloredTeam = (id: string) => {
+    const team = teams.find((item) => item.id === id)
+    return team ? <TeamName name={team.name} club={team.club} /> : id
+  }
 
   if (teams.length < 2) return <div className="page">{tournamentTabs}<EmptyState icon={GitBranch} title="Inserisci almeno due squadre" action={onConfigure} /></div>
 
@@ -1162,8 +1194,8 @@ function StructureView({ config, teams, matches, selectedFormat, phases, tournam
   if (customMultiStage) {
     const sourceLabel = (source: string) => {
       const resolved = resolveParticipantId(source, previewMatches)
-      if (resolved && teamById.has(resolved)) return teamById.get(resolved) as string
-      if (teamById.has(source)) return teamById.get(source) as string
+      if (resolved && teamById.has(resolved)) return coloredTeam(resolved)
+      if (teamById.has(source)) return coloredTeam(source)
       const rank = source.match(/^rank:pool-([^:]+):(\d+)$/)
       if (rank) return `${rank[2]}ª classificata · Girone ${rank[1]}`
       const best = source.match(/^best:phase-(\d+):rank-(\d+):(\d+)$/)
@@ -1202,7 +1234,7 @@ function StructureView({ config, teams, matches, selectedFormat, phases, tournam
     const knockoutRounds = [...new Set(previewMatches.map((match) => match.round))].sort((a, b) => a - b)
     const sourceLabel = (source: string) => {
       const resolved = resolveParticipantId(source, previewMatches)
-      if (resolved) return teamById.get(resolved) ?? resolved
+      if (resolved) return coloredTeam(resolved)
       const reference = source.match(/^(winner|loser):(.+)$/)
       if (!reference) return source
       return `${reference[1] === 'winner' ? 'Vincente' : 'Perdente'} ${codeById.get(reference[2]) ?? reference[2]}`
@@ -1230,7 +1262,7 @@ function StructureView({ config, teams, matches, selectedFormat, phases, tournam
       <header className="phase-heading"><div><span>Fase 1</span><h3>Composizione dei gironi</h3></div><p>{teams.length} squadre</p></header>
       <div className="pools-grid">{pools.map((pool) => <article className="pool-card" key={pool.name}>
         <header><h4>Girone {pool.name.replace(/^\d+/, '')}</h4><span>{pool.teams.length} squadre</span></header>
-        <ol>{pool.teams.map((team) => <li key={team}>{team}</li>)}</ol>
+        <ol>{pool.teams.map((name) => <li key={name}><TeamName name={name} club={teams.find((team) => team.name === name)?.club} /></li>)}</ol>
         <footer>{phases.length > 1 && groupPhase?.advanceAll ? 'Passano tutte' : 'Classifica finale del girone'}</footer>
       </article>)}</div>
     </section>
@@ -1239,7 +1271,7 @@ function StructureView({ config, teams, matches, selectedFormat, phases, tournam
 
 function LivePhaseOverview({ matches, teams, phases, readyCourts, suggestedMatchId, onStart, onEdit }: { matches: Match[]; teams: Team[]; phases: TournamentPhase[]; readyCourts: Map<string, number>; suggestedMatchId?: string; onStart: (match: Match) => void; onEdit: (match: Match) => void }) {
   const teamById = new Map(teams.map((team) => [team.id, team]))
-  const currentPhase = phases.find((phase) => matches.some((match) => match.phaseId === phase.id && match.status !== 'completed')) ?? phases.at(-1)
+  const currentPhase = currentTournamentPhase({ phases, matches })
   const phaseMatches = currentPhase ? matches.filter((match) => match.phaseId === currentPhase.id) : []
   const pools = [...new Set(phaseMatches.map((match) => match.pool).filter((pool): pool is string => Boolean(pool)))]
   const sections = pools.length ? pools.map((pool) => ({
@@ -1249,20 +1281,19 @@ function LivePhaseOverview({ matches, teams, phases, readyCourts, suggestedMatch
   })) : [...new Set(phaseMatches.map((match) => match.phaseName.split(' · ')[0]))].map((name) => ({ id: name, title: name, matches: phaseMatches.filter((match) => match.phaseName.startsWith(name)) }))
 
   const matchRow = (match: Match) => {
-    const result = getSetWinner(match.sets)
     const readyCourt = readyCourts.get(match.id)
     const suggested = match.id === suggestedMatchId && match.status === 'scheduled'
     return <article className={`phase-match-row ${match.status} ${suggested ? 'suggested' : ''}`} key={match.id}>
       <div><time>{formatMinute(match.startMinute)}</time><small>{match.phaseName}</small></div>
-      <span>{participantLabel(match.teamAId, matches, teamById)}</span>
-      <b>{match.status === 'completed' ? `${result.a} – ${result.b}` : 'vs'}</b>
-      <span>{participantLabel(match.teamBId, matches, teamById)}</span>
+      <span><TeamName name={participantLabel(match.teamAId, matches, teamById)} club={teamById.get(resolveParticipantId(match.teamAId, matches) ?? '')?.club} /></span>
+      {match.status === 'completed' ? <MatchSetScores sets={match.sets} /> : <b>vs</b>}
+      <span><TeamName name={participantLabel(match.teamBId, matches, teamById)} club={teamById.get(resolveParticipantId(match.teamBId, matches) ?? '')?.club} /></span>
       {match.status === 'scheduled' ? <button className={`button ${suggested ? 'primary' : 'secondary'}`} disabled={!readyCourt} onClick={() => onStart(match)}><Play size={13} /> {readyCourt ? `Avvia · C${readyCourt}` : 'In attesa'}</button> : <button className={`button ${match.status === 'playing' ? 'result' : 'secondary'}`} onClick={() => onEdit(match)}>{match.status === 'playing' ? <><Save size={13} /> Risultato</> : 'Modifica'}</button>}
     </article>
   }
 
   return <section className="standings-embedded live-phase-overview">
-    <div className="page-heading"><div><span className="eyebrow">Fase attuale</span><h2>{currentPhase?.name ?? 'Partite'}</h2><p>Classifiche e partite sono aggiornate insieme. La riga gialla è il prossimo incontro suggerito.</p></div></div>
+    {!phaseMatches.length && <p className="empty-results">Nessuna partita generata per questo torneo.</p>}
     <div className="phase-overview-grid">{sections.map((section) => {
       const resolvedMatches = resolveMatchesForStandings(section.matches, matches)
       const ids = new Set(resolvedMatches.flatMap((match) => [match.teamAId, match.teamBId]))

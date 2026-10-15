@@ -10,12 +10,14 @@ export type PublicMatch = {
   startMinute: number
   teamA: string
   teamB: string
+  teamAClub?: string
+  teamBClub?: string
   sets: SetScore[]
 }
 
-export type PublicStanding = Standing & { teamName: string }
+export type PublicStanding = Standing & { teamName: string; club?: string }
 export type PublicStandingSection = { id: string; tournamentId: string; tournamentLabel: string; phaseName: string; title: string; rows: PublicStanding[] }
-export type PublicTournament = { id: string; label: string; completed: number; total: number }
+export type PublicTournament = { id: string; label: string; color?: string; completed: number; total: number }
 
 export type PublicSnapshot = {
   app: 'tournamanager-live'
@@ -27,9 +29,10 @@ export type PublicSnapshot = {
   playing: PublicMatch[]
   results: PublicMatch[]
   standings: PublicStandingSection[]
+  clubs?: string[]
 }
 
-type PublicWorkspace = { id: string; label: string; state: TournamentState }
+type PublicWorkspace = { id: string; label: string; color?: string; state: TournamentState }
 
 const teamName = (source: string, state: TournamentState) => {
   const resolved = resolveParticipantId(source, state.matches)
@@ -45,6 +48,8 @@ const publicMatch = (workspace: PublicWorkspace, match: TournamentState['matches
   startMinute: match.startMinute,
   teamA: teamName(match.teamAId, workspace.state),
   teamB: teamName(match.teamBId, workspace.state),
+  teamAClub: workspace.state.teams.find((team) => team.id === resolveParticipantId(match.teamAId, workspace.state.matches))?.club,
+  teamBClub: workspace.state.teams.find((team) => team.id === resolveParticipantId(match.teamBId, workspace.state.matches))?.club,
   sets: match.sets,
 })
 
@@ -69,7 +74,7 @@ export function buildPublicSnapshot(workspaces: PublicWorkspace[]): PublicSnapsh
       const resolved = resolveMatchesForStandings(poolMatches, state.matches)
       const ids = new Set(resolved.flatMap((match) => [match.teamAId, match.teamBId]))
       const rows = calculateStandings(state.teams.filter((team) => ids.has(team.id)), resolved)
-        .map((row) => ({ ...row, teamName: state.teams.find((team) => team.id === row.teamId)?.name ?? row.teamId }))
+        .map((row) => ({ ...row, teamName: state.teams.find((team) => team.id === row.teamId)?.name ?? row.teamId, club: state.teams.find((team) => team.id === row.teamId)?.club }))
       standings.push({ id: `${workspace.id}:${pool}`, tournamentId: workspace.id, tournamentLabel: workspace.label, phaseName: phase.name, title: `Girone ${pool.replace(/^\d+/, '')}`, rows })
     })
   })
@@ -82,12 +87,14 @@ export function buildPublicSnapshot(workspaces: PublicWorkspace[]): PublicSnapsh
     tournaments: workspaces.map((workspace) => ({
       id: workspace.id,
       label: workspace.label,
+      color: workspace.color,
       completed: workspace.state.matches.filter((match) => match.status === 'completed').length,
       total: workspace.state.matches.length,
     })),
     playing,
     results: results.slice(0, 24),
     standings,
+    clubs: [...new Set(workspaces.flatMap((workspace) => workspace.state.teams.map((team) => team.club)).filter(Boolean))],
   }
 }
 
@@ -95,4 +102,3 @@ export const publicSetResult = (sets: SetScore[]) => {
   const result = getSetWinner(sets)
   return `${result.a} – ${result.b}`
 }
-
