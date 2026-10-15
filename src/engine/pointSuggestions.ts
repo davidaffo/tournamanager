@@ -1,4 +1,4 @@
-import { estimateMatchMinutes, generateParallelMatches, toMinute, tournamentEndMinute } from './core'
+import { allowedCourts, estimateMatchMinutes, generateParallelMatches, toMinute, tournamentEndMinute } from './core'
 import type { Match, Team, TournamentConfig, TournamentPhase } from './types'
 
 export type BalanceEntry = { id: string; teams: Team[]; config: TournamentConfig; phases: TournamentPhase[] }
@@ -13,7 +13,7 @@ export type PointBalanceSuggestion = {
 
 // Evaluate whole shared-court schedules, including simultaneous changes to several tournaments.
 export function suggestBalancedSetPoints(entries: BalanceEntry[], baseline?: Record<string, Match[]>): PointBalanceSuggestion | null {
-  if (entries.length < 2 || entries.some((entry) => entry.teams.length < 2 || !entry.phases.length)) return null
+  if (entries.length < 2 || entries.some((entry) => entry.teams.length < 2 || !entry.phases.length || !allowedCourts(entry.config).length)) return null
   const points = entries.map((entry) => Array.from({ length: entry.config.setsPerMatch }, (_, index) => entry.config.setPoints?.[index] ?? entry.config.pointsPerSet))
   const measure = (schedules: Record<string, Match[]>) => {
     const ends = entries.map((entry) => Math.max(toMinute(entry.config.startTime), ...(schedules[entry.id] ?? []).map((match) => match.endMinute)))

@@ -14,6 +14,8 @@ import { scrollToTournament, TournamentRows } from './TournamentRows'
 import { MatchSetScores } from './MatchSetScores'
 import { ClubColorsProvider, TeamName } from './TeamName'
 import { tournamentColor, tournamentPalette, tournamentTheme } from './tournamentColors'
+import { allowedCourts, normalizeCourtCategories, tournamentCategories } from './engine/core'
+import { CourtCategoryMenu } from './CourtCategoryMenu'
 
 type View = 'design' | 'structure' | 'control' | 'publish'
 type ThemeMode = 'light' | 'dark' | 'system'
@@ -80,6 +82,7 @@ const normalizeConfig = (config: TournamentConfig): TournamentConfig => ({
   winByTwo: false,
   phaseBreakMinutes: clampInteger(config.phaseBreakMinutes ?? defaultConfig.phaseBreakMinutes, 0, 240),
   setPoints: normalizeSetPoints(config),
+  courtCategories: normalizeCourtCategories(config.courtCategories),
 })
 
 const makeDefaultPhases = (teamCount: number): TournamentPhase[] => {
@@ -102,6 +105,17 @@ const makeInitialState = (): TournamentState => {
   }
 }
 
+export function makeEmptyWorkspaces(): MultiTournamentState {
+  const id = `tournament-${crypto.randomUUID()}`
+  return {
+    activeId: id,
+    tournaments: [{ id, label: '', color: tournamentColor(undefined), state: {
+      config: { ...defaultConfig, name: '', date: todayLocalDate(), setPoints: [...defaultConfig.setPoints], courtCategories: {} },
+      teams: [], phases: [], matches: [], selectedFormat: 'groups',
+    } }],
+  }
+}
+
 const makeInitialWorkspaces = (): MultiTournamentState => {
   const saved = localStorage.getItem(MULTI_STATE_KEY)
   if (saved) {
@@ -116,7 +130,7 @@ const makeInitialWorkspaces = (): MultiTournamentState => {
           color: tournamentColor(tournament.color, tournamentIndex),
           state: {
             ...tournament.state,
-            config: normalizeConfig({ ...tournament.state.config, name: shared.name, date: shared.date, startTime: shared.startTime, endTime: shared.endTime, courts: shared.courts, phaseBreakMinutes: shared.phaseBreakMinutes }),
+            config: normalizeConfig({ ...tournament.state.config, name: shared.name, date: shared.date, startTime: shared.startTime, endTime: shared.endTime, courts: shared.courts, phaseBreakMinutes: shared.phaseBreakMinutes, courtCategories: shared.courtCategories }),
             phases: enforceFinalGroupComposition(Array.from({ length: Math.min(MAX_PHASES, template.phases.length) }, (_, phaseIndex) => {
               const phase = tournament.state.phases[phaseIndex] ?? { ...template.phases[phaseIndex], id: `phase-${phaseIndex + 1}-${tournamentIndex}` }
               return {
@@ -358,7 +372,21 @@ type ConfigurationFile = {
 
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null
 
-function readConfigurationFile(contents: string): MultiTournamentState {
+export function buildConfigurationFile(tournaments: TournamentWorkspace[]): ConfigurationFile {
+  return {
+    app: 'tournamanager', version: 1,
+    tournaments: tournaments.map((tournament, index) => ({
+      label: tournament.label,
+      color: tournamentColor(tournament.color, index),
+      state: {
+        config: { ...tournament.state.config, courtCategories: normalizeCourtCategories(tournament.state.config.courtCategories) },
+        teams: tournament.state.teams, selectedFormat: tournament.state.selectedFormat, phases: tournament.state.phases,
+      },
+    })),
+  }
+}
+
+export function readConfigurationFile(contents: string): MultiTournamentState {
   const file: unknown = JSON.parse(contents)
   if (!isRecord(file) || file.app !== 'tournamanager' || file.version !== 1 || !Array.isArray(file.tournaments) || file.tournaments.length === 0) {
     throw new Error('File non valido')
@@ -398,7 +426,7 @@ function readConfigurationFile(contents: string): MultiTournamentState {
   })
 
   const shared = tournaments[0].state.config
-  const sharedKeys: Array<keyof TournamentConfig> = ['name', 'date', 'startTime', 'endTime', 'courts', 'phaseBreakMinutes']
+  const sharedKeys: Array<keyof TournamentConfig> = ['name', 'date', 'startTime', 'endTime', 'courts', 'phaseBreakMinutes', 'courtCategories']
   return {
     activeId: tournaments[0].id,
     tournaments: tournaments.map((tournament) => ({
@@ -451,6 +479,7 @@ function ManagerApp() {
   const completedMatches = managedMatches.filter((entry) => entry.match.status === 'completed').length
   const overallProgress = totalMatches ? (completedMatches / totalMatches) * 100 : 0
   const playingMatches = managedMatches.filter((entry) => entry.match.status === 'playing')
+  const presentCategories = tournamentCategories.filter((category) => managerState.tournaments.some((tournament) => tournament.state.config.tournamentType === category))
   const publicSnapshot = useMemo(() => buildPublicSnapshot(managerState.tournaments), [managerState.tournaments])
   const phaseProgressByTournament = new Map(managerState.tournaments.map((tournament) => {
     const unfinishedPhaseIndex = tournament.state.phases.findIndex((phase) => tournament.state.matches.some((match) => match.phaseId === phase.id && match.status !== 'completed'))
@@ -474,8 +503,8 @@ function ManagerApp() {
       liveTeamStats.set(key, { games: (previous?.games ?? 0) + 1, lastEnd: Math.max(previous?.lastEnd ?? toMinute(entry.config.startTime), entry.match.endMinute) })
     })
   })
-  const availableCourtFor = (entry: ManagedMatch) => [entry.match.court, ...Array.from({ length: config.courts }, (_, index) => index + 1).filter((court) => court !== entry.match.court)]
-    .find((court) => canStartOnSharedCourts(entry.tournamentId, { ...entry.match, court }, entry.matches, playingMatches))
+  const availableCourtFor = (entry: ManagedMatch) => allowedCourts(entry.config).sort((a, b) => Number(b === entry.match.court) - Number(a === entry.match.court))
+    .find((court) => canStartOnSharedCourts(entry.tournamentId, { ...entry.match, court }, entry.matches, playingMatches, entry.config))
   const livePriority = (entry: ManagedMatch) => {
     const ids = [resolveParticipantId(entry.match.teamAId, entry.matches), resolveParticipantId(entry.match.teamBId, entry.matches)].filter((id): id is string => Boolean(id))
     const fallback = toMinute(entry.config.startTime)
@@ -502,6 +531,7 @@ function ManagerApp() {
   })
   const customFormulaValid = isFormulaValid(teams.length, phases)
   const allParallelReady = managerState.tournaments.every((tournament) => tournament.state.phases.length === phases.length && isFormulaValid(tournament.state.teams.length, tournament.state.phases))
+  const tournamentsWithoutCourts = managerState.tournaments.filter((tournament) => !allowedCourts(tournament.state.config).length)
   const scheduleConfiguration = JSON.stringify(managerState.tournaments.map((tournament) => ({
     id: tournament.id,
     config: tournament.state.config,
@@ -676,20 +706,7 @@ function ManagerApp() {
     setEditingMatch(null)
   }
   const exportConfiguration = () => {
-    const file: ConfigurationFile = {
-      app: 'tournamanager',
-      version: 1,
-      tournaments: managerState.tournaments.map((tournament) => ({
-        label: tournament.label,
-        color: tournamentColor(tournament.color, managerState.tournaments.indexOf(tournament)),
-        state: {
-          config: tournament.state.config,
-          teams: tournament.state.teams,
-          selectedFormat: tournament.state.selectedFormat,
-          phases: tournament.state.phases,
-        },
-      })),
-    }
+    const file = buildConfigurationFile(managerState.tournaments)
     const blob = new Blob([JSON.stringify(file, null, 2)], { type: 'application/json' })
     const url = URL.createObjectURL(blob)
     const link = document.createElement('a')
@@ -700,6 +717,18 @@ function ManagerApp() {
     link.click()
     link.remove()
     window.setTimeout(() => URL.revokeObjectURL(url), 0)
+  }
+  const deleteEntireTournament = () => {
+    if (!window.confirm('Eliminare completamente il torneo da questo dispositivo? Verranno rimossi tutti i sotto-tornei, squadre, fasi, risultati, colori e vincoli dei campi. Ripartirai da una configurazione vuota. Per recuperarli servirà un file esportato.')) return
+    const empty = makeEmptyWorkspaces()
+    try { localStorage.setItem(MULTI_STATE_KEY, JSON.stringify(empty)) } catch { /* keep the empty state usable in memory */ }
+    setManagerState(empty)
+    setTeamTexts({})
+    setTeamErrors({})
+    setEditingMatch(null)
+    setPointSearch({ configuration: '', suggestion: null, loading: false, failed: false })
+    if (importInputRef.current) importInputRef.current.value = ''
+    setView('design')
   }
   const importConfiguration = async (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0]
@@ -718,7 +747,7 @@ function ManagerApp() {
     }
   }
   const updateConfig = <K extends keyof TournamentConfig>(key: K, value: TournamentConfig[K]) => {
-    const sharedKeys: Array<keyof TournamentConfig> = ['name', 'date', 'startTime', 'endTime', 'courts', 'phaseBreakMinutes']
+    const sharedKeys: Array<keyof TournamentConfig> = ['name', 'date', 'startTime', 'endTime', 'courts', 'phaseBreakMinutes', 'courtCategories']
     if (sharedKeys.includes(key)) {
       const changesSchedule = ['startTime', 'endTime', 'courts', 'phaseBreakMinutes'].includes(key)
       if (changesSchedule && !confirmReset(managerState.tournaments, 'Questa modifica cancellerà calendario e risultati di tutti i tornei. Continuare?')) return
@@ -728,6 +757,17 @@ function ManagerApp() {
     if (!confirmReset([activeWorkspace], 'Questa modifica cancellerà calendario e risultati del torneo selezionato. Continuare?')) return
     setState((current) => ({ ...current, config: { ...current.config, [key]: value }, matches: [] }))
   }
+  const updateCourtPolicy = (court: number, categories: TournamentType[]) => setManagerState((current) => {
+    const courtCategories = { ...normalizeCourtCategories(current.tournaments[0].state.config.courtCategories) }
+    const present = [...new Set(current.tournaments.map((tournament) => tournament.state.config.tournamentType))]
+    if (present.every((category) => categories.includes(category))) delete courtCategories[court]
+    else courtCategories[court] = categories
+    const tournaments = current.tournaments.map((tournament) => ({ ...tournament, state: { ...tournament.state, config: { ...tournament.state.config, courtCategories } } }))
+    const ready = tournaments.every((tournament) => tournament.state.phases.length === tournaments[0].state.phases.length && isFormulaValid(tournament.state.teams.length, tournament.state.phases))
+    if (!ready) return { ...current, tournaments }
+    const schedules = generateParallelMatches(tournaments.map((tournament) => ({ id: tournament.id, ...tournament.state })), Object.fromEntries(tournaments.map((tournament) => [tournament.id, tournament.state.matches.filter((match) => match.status !== 'scheduled')])))
+    return { ...current, tournaments: tournaments.map((tournament) => ({ ...tournament, state: { ...tournament.state, matches: schedules[tournament.id] ?? [] } })) }
+  })
   const updateSetsPerMatch = (value: number) => {
     const setsPerMatch = clampInteger(value, 1, MAX_SETS)
     if (!confirmReset([activeWorkspace], 'Cambiare il numero di set cancellerà calendario e risultati del torneo selezionato. Continuare?')) return
@@ -889,8 +929,8 @@ function ManagerApp() {
     const candidate = allMatches.find((entry) => entry.tournamentId === tournamentId && entry.match.id === id)
     if (!candidate) return current
     const playing = allMatches.filter((entry) => entry.match.status === 'playing')
-    const availableCourt = [candidate.match.court, ...Array.from({ length: candidate.config.courts }, (_, index) => index + 1).filter((court) => court !== candidate.match.court)]
-      .find((court) => canStartOnSharedCourts(tournamentId, { ...candidate.match, court }, candidate.matches, playing))
+    const availableCourt = allowedCourts(candidate.config).sort((a, b) => Number(b === candidate.match.court) - Number(a === candidate.match.court))
+      .find((court) => canStartOnSharedCourts(tournamentId, { ...candidate.match, court }, candidate.matches, playing, candidate.config))
     if (!availableCourt) return current
     return { ...current, tournaments: current.tournaments.map((tournament) => tournament.id === tournamentId ? {
       ...tournament, state: { ...tournament.state, matches: tournament.state.matches.map((match) => match.id === id ? { ...match, court: availableCourt, status: 'playing' } : match) },
@@ -1010,6 +1050,7 @@ function ManagerApp() {
                 <div className="configuration-transfer">
           <input ref={importInputRef} type="file" accept="application/json,.json" onChange={importConfiguration} />
           <button className="button danger" onClick={resetTournamentProgress}><RotateCcw size={16} /> Azzera torneo</button>
+          <button className="button danger" onClick={deleteEntireTournament}><Trash2 size={16} /> Elimina torneo</button>
           <button className="button secondary" onClick={() => importInputRef.current?.click()}><Upload size={16} /> Importa configurazione</button>
           <button className="button secondary" onClick={exportConfiguration}><Download size={16} /> Esporta configurazione</button>
         </div>
@@ -1060,10 +1101,11 @@ function ManagerApp() {
               <button className="button secondary" disabled={phases.length >= MAX_PHASES} onClick={addPhase}><Plus size={17} /> Aggiungi fase</button>
             </div>
             <TournamentTabs tournaments={managerState.tournaments} activeId={activeWorkspace.id} onSelect={selectTournament} />
-            {teams.length > 1 && <div className={`efficiency-status ${parallelPreviewSchedules && managerState.tournaments.length > 1 ? 'multi' : ''} ${overTime || unequalParallelDuration ? 'warning' : 'ok'}`}>
+            {teams.length > 1 && tournamentsWithoutCourts.length > 0 && <p className="structure-warning">Il calendario ha partite da assegnare: abilita almeno un campo per {tournamentsWithoutCourts.map((tournament) => tournament.label).join(', ')} dalla regia. Gli orari finali verranno ricalcolati.</p>}
+            {teams.length > 1 && tournamentsWithoutCourts.length === 0 && <div className={`efficiency-status ${parallelPreviewSchedules && managerState.tournaments.length > 1 ? 'multi' : ''} ${overTime || unequalParallelDuration ? 'warning' : 'ok'}`}>
               <div><strong>{parallelPreviewSchedules ? totalPreviewMatchCount : customMatchCount}</strong><span>{parallelPreviewSchedules && managerState.tournaments.length > 1 ? 'partite complessive' : 'partite previste'}</span></div><div><strong>{formatMinute(activeEstimatedEndMinute)}</strong><span>fine {activeWorkspace.label || `torneo ${activeTournamentIndex + 1}`}</span></div>{parallelPreviewSchedules && managerState.tournaments.length > 1 && <div className={unequalParallelDuration ? 'end-mismatch' : ''}><strong>{formatMinute(estimatedEndMinute)}</strong><span>{unequalParallelDuration ? `orari diversi · ${endTimeDifference} min` : 'fine comune'}</span></div>}<div><strong>{config.endTime}</strong><span>ora limite</span></div><p>{overTime ? `Il calendario supera l’orario di ${overtimeMinutes} minuti.` : unequalParallelDuration ? `${earliestTournament?.label || 'Un torneo'} termina ${endTimeDifference} minuti prima dell’ultimo.` : parallelPreviewSchedules && managerState.tournaments.length > 1 ? 'I tornei terminano insieme.' : 'Il calendario rientra nell’orario.'}</p>
             </div>}
-            {managerState.tournaments.length > 1 && <section className="point-suggestion" aria-live="polite"><div><strong>Consigliato · allinea la durata di tutti i sotto-tornei</strong>{!allParallelReady ? <p>Completa squadre e formula di tutti i sotto-tornei per confrontare le soluzioni.</p> : pointSearchLoading ? <p>Ricerca delle combinazioni di punti per tutti i sotto-tornei sui campi condivisi…</p> : pointSearch.failed ? <p>Il calcolo dei suggerimenti non è riuscito. Ricarica la pagina per riprovare.</p> : pointSuggestion ? <><p>Scarto tra le fini: {pointSuggestion.gapBefore} → <b>{pointSuggestion.gapAfter} min</b>{pointSuggestion.gapAfter === 0 ? ' · fine comune' : ' · avvicinamento delle durate'}</p><div className="point-balance-table"><table><thead><tr><th>Sotto-torneo</th><th>Punti per set consigliati</th><th>Fine attuale → proposta</th></tr></thead><tbody>{pointSuggestion.finishes.map((finish, index) => {
+            {managerState.tournaments.length > 1 && <section className="point-suggestion" aria-live="polite"><div><strong>Consigliato · allinea la durata di tutti i sotto-tornei</strong>{!allParallelReady ? <p>Completa squadre e formula di tutti i sotto-tornei per confrontare le soluzioni.</p> : tournamentsWithoutCourts.length > 0 ? <p>Abilita almeno un campo per ogni categoria prima di confrontare le durate.</p> : pointSearchLoading ? <p>Ricerca delle combinazioni di punti per tutti i sotto-tornei sui campi condivisi…</p> : pointSearch.failed ? <p>Il calcolo dei suggerimenti non è riuscito. Ricarica la pagina per riprovare.</p> : pointSuggestion ? <><p>Scarto tra le fini: {pointSuggestion.gapBefore} → <b>{pointSuggestion.gapAfter} min</b>{pointSuggestion.gapAfter === 0 ? ' · fine comune' : ' · avvicinamento delle durate'}</p><div className="point-balance-table"><table><thead><tr><th>Sotto-torneo</th><th>Punti per set consigliati</th><th>Fine attuale → proposta</th></tr></thead><tbody>{pointSuggestion.finishes.map((finish, index) => {
               const tournament = managerState.tournaments.find((item) => item.id === finish.tournamentId)!
               const change = pointSuggestion.changes.find((item) => item.tournamentId === finish.tournamentId)
               return <tr key={finish.tournamentId}><td>{tournament.label || `Torneo ${index + 1}`}</td><td>{change ? `${change.before.join(' / ')} → ${change.setPoints.join(' / ')}` : `${normalizeSetPoints(tournament.state.config).join(' / ')} · invariati`}</td><td>{formatMinute(finish.before)} → {formatMinute(finish.after)}</td></tr>
@@ -1138,11 +1180,15 @@ function ManagerApp() {
 
       {view === 'control' && <div className="page control-page">
         <div className="page-heading"><div><span className="eyebrow live"><i /> Regia condivisa</span><h2>Gestione incontri</h2><p>Tutti i sotto-tornei e tutti i campi in un’unica vista.</p></div><div className="heading-metrics"><Metric value={`${completedMatches}/${totalMatches}`} label="concluse" /><Metric value={playingMatches.length} label="in campo" /></div></div>
-        {managedMatches.length === 0 ? <EmptyState icon={Play} title="Crea prima il torneo e il suo calendario" action={() => setView('design')} /> : <>
+        {managedMatches.length === 0 && <EmptyState icon={Play} title="Crea prima il torneo e il suo calendario" action={() => setView('design')} />}
+        {tournamentsWithoutCourts.length > 0 && <p className="structure-warning" role="status">Nessun campo abilitato per: {tournamentsWithoutCourts.map((tournament) => tournament.label).join(', ')}. Abilita la categoria su almeno un campo per avviare le partite.</p>}
           <div className="live-courts">{Array.from({ length: config.courts }, (_, index) => index + 1).map((court) => {
             const activeOnCourt = playingMatches.filter((entry) => entry.match.court === court)
+            const categories = config.courtCategories?.[court] ?? tournamentCategories
             return <section className={`live-court ${activeOnCourt.length ? 'busy' : ''}`} key={court}>
               <header><span><MapPin size={17} /> Campo {court}</span><b>{activeOnCourt.length ? `${activeOnCourt.length} in gioco` : 'Libero'}</b></header>
+              <CourtCategoryMenu options={presentCategories.map((category) => ({ value: category, label: tournamentTypeLabels[category] }))} allowed={categories} onChange={(next) => updateCourtPolicy(court, next)} />
+              {activeOnCourt.some((entry) => !categories.includes(entry.config.tournamentType)) && <p className="court-policy-note">Il vincolo vale dai prossimi incontri. Quello in corso può terminare.</p>}
               {activeOnCourt.length ? <div className="live-active-list">{activeOnCourt.map((active) => {
                 const activeTeamById = new Map(active.teams.map((team) => [team.id, team]))
                 return <article key={`${active.tournamentId}-${active.match.id}`}><small>{active.tournamentLabel}</small>
@@ -1153,8 +1199,7 @@ function ManagerApp() {
             </section>
           })}</div>
           <TournamentTabs tournaments={managerState.tournaments} suggestedId={suggestedMatch?.tournamentId} onSelect={(id) => scrollToTournament('live-tournament', id)} />
-        </>}
-        {managedMatches.length > 0 && <TournamentRows tournaments={managerState.tournaments} prefix="live-tournament" headerContent={(_, index) => <><p>Fase attuale · {currentTournamentPhase(managerState.tournaments[index].state)?.name ?? 'Da configurare'}</p><p className="tournament-heading-note">Giallo: prossima partita suggerita.</p></>}>{(_, index) => {
+        {managedMatches.length > 0 && <TournamentRows tournaments={managerState.tournaments} prefix="live-tournament" headerContent={(_, index) => <><p>Fase attuale: {currentTournamentPhase(managerState.tournaments[index].state)?.name ?? 'Da configurare'}</p></>}>{(_, index) => {
           const tournament = managerState.tournaments[index]
           return <LivePhaseOverview matches={tournament.state.matches} teams={tournament.state.teams} phases={tournament.state.phases} readyCourts={new Map(readyMatches.filter((entry) => entry.tournamentId === tournament.id).map((entry) => [entry.match.id, entry.availableCourt as number]))} suggestedMatchId={suggestedMatch?.tournamentId === tournament.id ? suggestedMatch.match.id : undefined} onStart={(match) => startMatch(tournament.id, match.id)} onEdit={(match) => setEditingMatch({ tournamentId: tournament.id, match })} />
         }}</TournamentRows>}
@@ -1284,7 +1329,7 @@ function LivePhaseOverview({ matches, teams, phases, readyCourts, suggestedMatch
     const readyCourt = readyCourts.get(match.id)
     const suggested = match.id === suggestedMatchId && match.status === 'scheduled'
     return <article className={`phase-match-row ${match.status} ${suggested ? 'suggested' : ''}`} key={match.id}>
-      <div><time>{formatMinute(match.startMinute)}</time><small>{match.phaseName}</small></div>
+      <div><time>{match.court === 0 ? '—' : formatMinute(match.startMinute)}</time><small>{match.phaseName}</small></div>
       <span><TeamName name={participantLabel(match.teamAId, matches, teamById)} club={teamById.get(resolveParticipantId(match.teamAId, matches) ?? '')?.club} /></span>
       {match.status === 'completed' ? <MatchSetScores sets={match.sets} /> : <b>vs</b>}
       <span><TeamName name={participantLabel(match.teamBId, matches, teamById)} club={teamById.get(resolveParticipantId(match.teamBId, matches) ?? '')?.club} /></span>
@@ -1299,7 +1344,7 @@ function LivePhaseOverview({ matches, teams, phases, readyCourts, suggestedMatch
       const ids = new Set(resolvedMatches.flatMap((match) => [match.teamAId, match.teamBId]))
       const standings = currentPhase?.format === 'groups' ? calculateStandings(teams.filter((team) => ids.has(team.id)), resolvedMatches) : []
       return <section className="panel phase-overview-card" key={section.id}>
-        <header><div><h3>{section.title}</h3><span>{section.matches.filter((match) => match.status === 'completed').length}/{section.matches.length} giocate</span></div></header>
+        <header><div><h3>{section.title} - Classifica</h3><span>{section.matches.filter((match) => match.status === 'completed').length}/{section.matches.length} giocate</span></div></header>
         {standings.length > 0 && <div className="phase-standings"><table><thead><tr><th>#</th><th>Squadra</th><th>G</th><th>V</th><th>N</th><th>PT</th><th>Set</th><th>Punti</th></tr></thead><tbody>{standings.map((row, index) => <tr key={row.teamId}><td><strong className="rank">{index + 1}</strong></td><td><TeamBadge team={teamById.get(row.teamId)} /></td><td>{row.played}</td><td>{row.won}</td><td>{row.drawn}</td><td><strong>{row.tablePoints}</strong></td><td>{row.setsWon}:{row.setsLost}</td><td>{row.pointsFor}:{row.pointsAgainst}</td></tr>)}</tbody></table></div>}
         <div className="phase-match-list">{section.matches.sort((a, b) => a.startMinute - b.startMinute).map(matchRow)}</div>
       </section>

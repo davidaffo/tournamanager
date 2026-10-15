@@ -1,4 +1,20 @@
-import type { FormatKind, GroupScoring, Match, SetScore, Standing, Team, TournamentConfig, TournamentPhase } from './types'
+import type { FormatKind, GroupScoring, Match, SetScore, Standing, Team, TournamentConfig, TournamentPhase, TournamentType } from './types'
+
+export const tournamentCategories: TournamentType[] = ['s3-red', 's3-green', 's3-white', '6v6']
+
+export function normalizeCourtCategories(value: unknown): Record<number, TournamentType[]> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {}
+  return Object.fromEntries(Object.entries(value).flatMap(([key, categories]) => {
+    const court = Number(key)
+    if (!Number.isInteger(court) || court < 1 || court > 16 || !Array.isArray(categories)) return []
+    return [[court, tournamentCategories.filter((category) => categories.includes(category))]]
+  }))
+}
+
+export function allowedCourts(config: TournamentConfig): number[] {
+  return Array.from({ length: config.courts }, (_, index) => index + 1)
+    .filter((court) => config.courtCategories?.[court] === undefined || config.courtCategories[court].includes(config.tournamentType))
+}
 
 export const defaultGroupScoring = (): GroupScoring => ({
   mode: 'result', setWinPoints: 1, winPoints: 3, drawPoints: 1,
@@ -344,25 +360,43 @@ function generateDrafts(teams: Team[], config: TournamentConfig, kind: FormatKin
   return drafts
 }
 
-export function generateParallelMatches(entries: Array<{ id: string; teams: Team[]; config: TournamentConfig; phases: TournamentPhase[] }>): Record<string, Match[]> {
+export function generateParallelMatches(entries: Array<{ id: string; teams: Team[]; config: TournamentConfig; phases: TournamentPhase[] }>, fixedMatches: Record<string, Match[]> = {}): Record<string, Match[]> {
   if (!entries.length) return {}
   const result = Object.fromEntries(entries.map((entry) => [entry.id, [] as Match[]])) as Record<string, Match[]>
   const drafts = new Map(entries.map((entry) => [entry.id, generateDrafts(entry.teams, entry.config, entry.phases[0]?.format ?? 'groups', entry.phases)]))
   const courtCount = Math.max(1, entries[0].config.courts)
   const start = toMinute(entries[0].config.startTime)
   const phaseCount = Math.max(...entries.map((entry) => entry.phases.length))
+  const fixed = entries.flatMap((entry) => (fixedMatches[entry.id] ?? []).map((match) => ({ tournamentId: entry.id, match })))
+  const reservations = Array.from({ length: courtCount }, (_, index) => fixed.filter((item) => item.match.court === index + 1).map((item) => item.match).sort((a, b) => a.startMinute - b.startMinute))
+  const eligibleCourts = new Map(entries.map((entry) => [entry.id, allowedCourts({ ...entry.config, courts: courtCount })]))
+  entries.forEach((entry) => result[entry.id].push(...(fixedMatches[entry.id] ?? [])))
   let phaseStart = start
 
   for (let phaseIndex = 0; phaseIndex < phaseCount; phaseIndex += 1) {
     const courtReady = Array.from({ length: courtCount }, () => phaseStart)
     const teamReady = new Map<string, number>()
     const matchReady = new Map<string, number>()
+    fixed.forEach(({ tournamentId, match }) => {
+      matchReady.set(`${tournamentId}:${match.id}`, match.endMinute)
+      if (match.phaseId !== entries.find((entry) => entry.id === tournamentId)?.phases[phaseIndex]?.id) return
+      for (const source of [match.teamAId, match.teamBId]) teamReady.set(`${tournamentId}:${source}`, Math.max(teamReady.get(`${tournamentId}:${source}`) ?? phaseStart, match.endMinute))
+    })
     const pending = entries.flatMap((entry, entryIndex) => (drafts.get(entry.id) ?? [])
       .filter((draft) => draft.phaseId === entry.phases[phaseIndex]?.id)
+      .filter((draft) => !(fixedMatches[entry.id] ?? []).some((match) => match.id === draft.id))
       .map((draft, draftIndex) => ({ entry, entryIndex, draft, draftIndex })))
     const teamGames = new Map<string, number>()
     const poolGames = new Map<string, number>()
     const tournamentGames = new Map<string, number>()
+    const fixedInPhase = fixed.filter(({ tournamentId, match }) => match.phaseId === entries.find((entry) => entry.id === tournamentId)?.phases[phaseIndex]?.id)
+    courtReady.fill(Math.max(phaseStart, ...fixedInPhase.map(({ match }) => match.status === 'playing' ? match.startMinute : match.endMinute)))
+    fixedInPhase.forEach(({ tournamentId, match }) => {
+      for (const source of [match.teamAId, match.teamBId]) teamGames.set(`${tournamentId}:${source}`, (teamGames.get(`${tournamentId}:${source}`) ?? 0) + 1)
+      const poolKey = `${tournamentId}:${match.pool ?? match.phaseName}`
+      poolGames.set(poolKey, (poolGames.get(poolKey) ?? 0) + 1)
+      tournamentGames.set(tournamentId, (tournamentGames.get(tournamentId) ?? 0) + 1)
+    })
     while (pending.length) {
       const candidates = pending.flatMap((item, pendingIndex) => {
         const { entry, draft } = item
@@ -376,10 +410,17 @@ export function generateParallelMatches(entries: Array<{ id: string; teams: Team
         }
         let court = 0
         let startMinute = Number.POSITIVE_INFINITY
-        for (let candidateCourt = 0; candidateCourt < courtCount; candidateCourt += 1) {
-          const candidateStart = Math.max(courtReady[candidateCourt], readyFor(draft.teamAId), readyFor(draft.teamBId))
+        for (const courtNumber of eligibleCourts.get(entry.id) ?? []) {
+          const candidateCourt = courtNumber - 1
+          let candidateStart = Math.max(courtReady[candidateCourt], readyFor(draft.teamAId), readyFor(draft.teamBId))
+          const duration = estimateMatchMinutes(entry.config)
+          for (const occupied of reservations[candidateCourt]) {
+            if (candidateStart + duration <= occupied.startMinute) break
+            if (candidateStart < occupied.endMinute && candidateStart + duration > occupied.startMinute) candidateStart = occupied.endMinute
+          }
           if (candidateStart < startMinute) { startMinute = candidateStart; court = candidateCourt }
         }
+        if (!Number.isFinite(startMinute)) return []
         const teamGameCount = (teamGames.get(`${entry.id}:${draft.teamAId}`) ?? 0) + (teamGames.get(`${entry.id}:${draft.teamBId}`) ?? 0)
         const waitingSince = readyFor(draft.teamAId) + readyFor(draft.teamBId)
         return [{ ...item, pendingIndex, court, startMinute, teamGameCount, waitingSince }]
@@ -407,9 +448,13 @@ export function generateParallelMatches(entries: Array<{ id: string; teams: Team
       result[entry.id].push({ ...draft, court: selected.court + 1, startMinute: selected.startMinute, endMinute, status: 'scheduled', sets: [] })
       pending.splice(selected.pendingIndex, 1)
     }
-    const phaseEnd = Math.max(...courtReady, phaseStart)
+    // Keep blocked encounters visible without assigning them to an incompatible court.
+    pending.forEach(({ entry, draft }) => result[entry.id].push({ ...draft, court: 0, startMinute: phaseStart, endMinute: phaseStart + estimateMatchMinutes(entry.config), status: 'scheduled', sets: [] }))
+    const fixedPhaseEnds = fixed.filter(({ tournamentId, match }) => match.phaseId === entries.find((entry) => entry.id === tournamentId)?.phases[phaseIndex]?.id).map(({ match }) => match.endMinute)
+    const phaseEnd = Math.max(...courtReady, ...fixedPhaseEnds, phaseStart)
     phaseStart = phaseEnd + (phaseIndex < phaseCount - 1 ? Math.max(0, entries[0].config.phaseBreakMinutes) : 0)
   }
+  entries.forEach((entry) => result[entry.id].sort((a, b) => a.startMinute - b.startMinute || a.id.localeCompare(b.id, undefined, { numeric: true })))
   return result
 }
 
@@ -417,6 +462,7 @@ export function generateMatches(teams: Team[], config: TournamentConfig, kind: F
   const drafts = generateDrafts(teams, config, kind, phases)
   const matchMinutes = estimateMatchMinutes(config)
   const start = toMinute(config.startTime)
+  const eligibleCourts = allowedCourts(config)
   const courtReady = Array.from({ length: config.courts }, () => start)
   const occupiedByCourt = Array.from({ length: config.courts }, (_, court) => occupiedMatches
     .filter((match) => match.court === court + 1)
@@ -454,11 +500,13 @@ export function generateMatches(teams: Team[], config: TournamentConfig, kind: F
         if (dependencies.some((id) => !matchReady.has(id))) return []
         let court = 0
         let startMinute = Number.POSITIVE_INFINITY
-        for (let candidateCourt = 0; candidateCourt < config.courts; candidateCourt += 1) {
+        for (const courtNumber of eligibleCourts) {
+          const candidateCourt = courtNumber - 1
           const requestedStart = Math.max(courtReady[candidateCourt], participantReady(draft.teamAId), participantReady(draft.teamBId))
           const candidateStart = nextFreeStart(candidateCourt, requestedStart)
           if (candidateStart < startMinute) { startMinute = candidateStart; court = candidateCourt }
         }
+        if (!Number.isFinite(startMinute)) return []
         const teamGameCount = (teamGames.get(draft.teamAId) ?? 0) + (teamGames.get(draft.teamBId) ?? 0)
         const waitingSince = participantReady(draft.teamAId) + participantReady(draft.teamBId)
         return [{ draft, draftIndex, pendingIndex, court, startMinute, teamGameCount, waitingSince }]
@@ -483,6 +531,7 @@ export function generateMatches(teams: Team[], config: TournamentConfig, kind: F
       scheduled.push({ ...draft, court: selected.court + 1, startMinute: selected.startMinute, endMinute, status: 'scheduled', sets: [] })
       pending.splice(selected.pendingIndex, 1)
     }
+    pending.forEach(({ draft }) => scheduled.push({ ...draft, court: 0, startMinute: Math.max(start, ...courtReady), endMinute: Math.max(start, ...courtReady) + matchMinutes, status: 'scheduled', sets: [] }))
   })
   return scheduled
 }
@@ -490,6 +539,9 @@ export function generateMatches(teams: Team[], config: TournamentConfig, kind: F
 export function ensureParallelSchedules(entries: Array<{ id: string; teams: Team[]; config: TournamentConfig; phases: TournamentPhase[]; matches: Match[] }>): Record<string, Match[]> {
   const hasStarted = entries.some((entry) => entry.matches.some((match) => match.status !== 'scheduled'))
   if (!hasStarted) return generateParallelMatches(entries)
+  if (entries.some((entry) => entry.matches.some((match) => match.status === 'scheduled' && !allowedCourts(entry.config).includes(match.court)))) {
+    return generateParallelMatches(entries, Object.fromEntries(entries.map((entry) => [entry.id, entry.matches.filter((match) => match.status !== 'scheduled')])))
+  }
 
   const result = Object.fromEntries(entries.map((entry) => [entry.id, entry.matches])) as Record<string, Match[]>
   let occupiedMatches = entries.flatMap((entry) => entry.matches)
@@ -661,8 +713,10 @@ export function canStartOnSharedCourts(
   match: Match,
   matches: Match[],
   playing: Array<{ tournamentId: string; match: Match; matches: Match[] }>,
+  config?: TournamentConfig,
 ) {
   if (match.status !== 'scheduled') return false
+  if (config && !allowedCourts(config).includes(match.court)) return false
   const teamA = resolveParticipantId(match.teamAId, matches)
   const teamB = resolveParticipantId(match.teamBId, matches)
   if (!teamA || !teamB) return false

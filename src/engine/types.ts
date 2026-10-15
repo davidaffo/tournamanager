@@ -14,6 +14,7 @@ export type TournamentConfig = {
   startTime: string
   endTime: string
   courts: number
+  courtCategories?: Record<number, TournamentType[]>
   tournamentType: TournamentType
   setsPerMatch: number
   pointsPerSet: number

@@ -42,7 +42,7 @@ h1, h2, h3, h4, .brand { font-family: Manrope, Inter, ui-sans-serif, system-ui, 
 .reset-button { margin-top: 10px; font-size: 12px; justify-content: center; }
 
 main { min-width: 0; }
-.topbar { height: 91px; padding: 0 42px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--line); background: rgba(243, 241, 232, .92); backdrop-filter: blur(10px); position: sticky; top: 0; z-index: 4; }
+.topbar { height: 91px; padding: 0 42px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--line); background: rgba(243, 241, 232, .92); backdrop-filter: blur(10px); top: 0; z-index: 4; }
 .topbar h1 { margin: 2px 0 0; font-size: 18px; }
 .eyebrow { color: var(--muted); text-transform: uppercase; font-size: 10px; font-weight: 800; letter-spacing: 1.6px; }
 .topbar-actions { display: flex; align-items: center; gap: 16px; }
@@ -290,6 +290,22 @@ main { min-width: 0; }
 .live-court > header span { display: flex; align-items: center; gap: 7px; font-size: 12px; font-weight: 800; }
 .live-court > header b { padding: 5px 8px; border-radius: 20px; color: var(--green); background: var(--mint); font-size: 8px; text-transform: uppercase; }
 .live-court.busy > header b { color: #285b91; background: #e4effb; }
+.court-category-menu { position: relative; margin-top: 10px; }
+.court-category-menu > summary { display: flex; align-items: center; gap: 7px; min-height: 28px; padding: 5px 8px; border: 1px solid var(--line); border-radius: 8px; color: var(--muted); font-size: 9px; cursor: pointer; list-style: none; }
+.court-category-menu > summary::-webkit-details-marker { display: none; }
+.court-category-menu > summary > span { font-weight: 700; }
+.court-category-menu > summary > small { min-width: 0; flex: 1; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; text-align: right; color: var(--ink); font-size: 9px; }
+.court-category-menu[open] > summary { border-color: var(--green); }
+.court-category-menu[open] > summary > svg:last-child { transform: rotate(180deg); }
+.court-category-menu > summary:focus-visible { outline: 2px solid var(--green); outline-offset: 2px; }
+.court-category-popover { position: absolute; z-index: 15; top: calc(100% + 6px); left: 0; width: 100%; min-width: 210px; padding: 12px; border: 1px solid var(--line); border-radius: 11px; background: var(--card); box-shadow: 0 8px 24px rgba(0,0,0,.16); }
+.court-category-popover fieldset { margin: 0; padding: 0; border: 0; }
+.court-category-popover legend { margin-bottom: 8px; color: var(--muted); font-size: 9px; font-weight: 700; }
+.court-category-popover label { display: flex; align-items: center; gap: 9px; padding: 8px 4px; font-size: 11px; cursor: pointer; }
+.court-category-popover input { accent-color: var(--green); }
+.court-category-popover footer { display: flex; justify-content: space-between; gap: 8px; margin-top: 8px; padding-top: 9px; border-top: 1px solid var(--line); }
+.court-category-popover button { padding: 5px 7px; border: 0; border-radius: 6px; color: var(--green); background: var(--mint); font-size: 9px; font-weight: 700; }
+.court-category-popover p, .court-policy-note { margin: 8px 0 0; color: var(--muted); font-size: 9px; line-height: 1.4; }
 .live-active-list { display: grid; gap: 14px; margin-top: 14px; }
 .live-active-list > article + article { padding-top: 14px; border-top: 1px solid var(--line); }
 .live-active-list > article > small { color: var(--muted); font-size: 9px; font-weight: 800; text-transform: uppercase; }
