@@ -115,6 +115,13 @@ main { min-width: 0; }
 .match-duration-estimate span { font-size: 10px; font-weight: 700; }
 .match-duration-estimate strong { font-size: 13px; }
 .match-duration-estimate small { grid-column: 2 / -1; color: var(--muted); font-size: 8px; }
+.point-suggestion { margin-top: 12px; padding: 12px; border: 1px solid var(--line); border-radius: 9px; display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+.point-suggestion > div { flex: 1 1 220px; }
+.point-suggestion strong { color: #9a6b00; font-size: 11px; }
+.point-suggestion p { margin: 6px 0 0; color: var(--muted); font-size: 10px; line-height: 1.5; }
+.point-balance-table { margin-top: 12px; overflow-x: auto; }
+.point-balance-table th, .point-balance-table td { padding: 8px 12px; height: auto; text-align: left; white-space: nowrap; }
+:root[data-theme="dark"] .point-suggestion strong { color: var(--yellow); }
 .games-policy { margin-top: 20px; padding: 0 17px 17px; border-radius: 12px; background: #f1eee3; }
 .games-policy .subsection { border: 0; padding-top: 16px; }
 .finals-settings { display: grid; grid-template-columns: minmax(190px, 1fr) auto; gap: 18px; align-items: end; }

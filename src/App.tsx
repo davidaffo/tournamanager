@@ -9,6 +9,7 @@ import type { FormatKind, GroupComposition, GroupScoringMode, Match, SetScore, T
 import { NextcloudPublisher } from './NextcloudPublisher'
 import { PublicViewer } from './PublicViewer'
 import { buildPublicSnapshot } from './publicSnapshot'
+import type { PointBalanceSuggestion } from './engine/pointSuggestions'
 
 type View = 'design' | 'structure' | 'control' | 'publish'
 type ThemeMode = 'light' | 'dark' | 'system'
@@ -16,9 +17,14 @@ type TournamentWorkspace = { id: string; label: string; state: TournamentState }
 type MultiTournamentState = { activeId: string; tournaments: TournamentWorkspace[] }
 type ManagedMatch = { tournamentId: string; tournamentLabel: string; match: Match; matches: Match[]; teams: Team[]; config: TournamentConfig }
 
+const todayLocalDate = () => {
+  const today = new Date()
+  return `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`
+}
+
 const defaultConfig: TournamentConfig = {
   name: 'Volley Day 2026',
-  date: '2026-09-20',
+  date: todayLocalDate(),
   startTime: '09:00',
   endTime: '20:00',
   courts: 4,
@@ -84,7 +90,7 @@ const enforceFinalGroupComposition = (phases: TournamentPhase[]) => phases.map((
 const makeInitialState = (): TournamentState => {
   const teams = import.meta.env.DEV ? parseTeams(demoTeamNames.join('\n')) : []
   return {
-    config: defaultConfig,
+    config: { ...defaultConfig, date: todayLocalDate() },
     teams,
     selectedFormat: 'groups',
     phases: makeDefaultPhases(teams.length),
@@ -513,6 +519,25 @@ function ManagerApp() {
   const deadlineMinute = tournamentEndMinute(config.startTime, config.endTime)
   const overTime = customFormulaValid && estimatedEndMinute > deadlineMinute
   const overtimeMinutes = Math.max(0, estimatedEndMinute - deadlineMinute)
+  const [pointSearch, setPointSearch] = useState<{ configuration: string; suggestion: PointBalanceSuggestion | null; loading: boolean; failed: boolean }>({ configuration: '', suggestion: null, loading: false, failed: false })
+  useEffect(() => {
+    if (view !== 'design' || !allParallelReady || managerState.tournaments.length < 2) return
+    const entries = JSON.parse(scheduleConfiguration)
+    const worker = new Worker(new URL('./engine/pointSuggestions.worker.ts', import.meta.url), { type: 'module' })
+    setPointSearch({ configuration: scheduleConfiguration, suggestion: null, loading: true, failed: false })
+    worker.onmessage = (event: MessageEvent<{ suggestion: PointBalanceSuggestion | null; failed: boolean }>) => {
+      setPointSearch({ configuration: scheduleConfiguration, ...event.data, loading: false })
+      worker.terminate()
+    }
+    worker.onerror = () => {
+      setPointSearch({ configuration: scheduleConfiguration, suggestion: null, loading: false, failed: true })
+      worker.terminate()
+    }
+    worker.postMessage(entries)
+    return () => worker.terminate()
+  }, [view, allParallelReady, scheduleConfiguration])
+  const pointSuggestion = pointSearch.configuration === scheduleConfiguration ? pointSearch.suggestion : null
+  const pointSearchLoading = pointSearch.loading || pointSearch.configuration !== scheduleConfiguration
   const suggestedGroups = new Map<string, number>()
   if (overTime) phases.forEach((phase, phaseIndex) => {
     if (phase.format !== 'groups') return
@@ -708,6 +733,16 @@ function ManagerApp() {
       config: { ...current.config, setPoints: normalizeSetPoints(current.config).map((points, currentIndex) => currentIndex === index ? clampInteger(value, 1, 99) : points) },
       matches: [],
     }))
+  }
+  const applyPointSuggestion = () => {
+    if (!pointSuggestion || !confirmReset(managerState.tournaments, 'Applicare i punti suggeriti richiede di rigenerare il calendario condiviso e cancella i risultati di tutti i sotto-tornei. Continuare?')) return
+    setManagerState((current) => ({ ...current, tournaments: current.tournaments.map((tournament) => ({
+      ...tournament,
+      state: { ...tournament.state, matches: [], config: (() => {
+        const change = pointSuggestion.changes.find((item) => item.tournamentId === tournament.id)
+        return change ? { ...tournament.state.config, pointsPerSet: change.setPoints[0], setPoints: change.setPoints } : tournament.state.config
+      })() },
+    })) }))
   }
   const updateTournamentLabel = (label: string) => setManagerState((current) => ({
     ...current, tournaments: current.tournaments.map((tournament) => tournament.id === current.activeId ? { ...tournament, label } : tournament),
@@ -1003,6 +1038,11 @@ function ManagerApp() {
             {teams.length > 1 && <div className={`efficiency-status ${parallelPreviewSchedules && managerState.tournaments.length > 1 ? 'multi' : ''} ${overTime || unequalParallelDuration ? 'warning' : 'ok'}`}>
               <div><strong>{parallelPreviewSchedules ? totalPreviewMatchCount : customMatchCount}</strong><span>{parallelPreviewSchedules && managerState.tournaments.length > 1 ? 'partite complessive' : 'partite previste'}</span></div><div><strong>{formatMinute(activeEstimatedEndMinute)}</strong><span>fine {activeWorkspace.label || `torneo ${activeTournamentIndex + 1}`}</span></div>{parallelPreviewSchedules && managerState.tournaments.length > 1 && <div className={unequalParallelDuration ? 'end-mismatch' : ''}><strong>{formatMinute(estimatedEndMinute)}</strong><span>{unequalParallelDuration ? `orari diversi · ${endTimeDifference} min` : 'fine comune'}</span></div>}<div><strong>{config.endTime}</strong><span>ora limite</span></div><p>{overTime ? `Il calendario supera l’orario di ${overtimeMinutes} minuti.` : unequalParallelDuration ? `${earliestTournament?.label || 'Un torneo'} termina ${endTimeDifference} minuti prima dell’ultimo.` : parallelPreviewSchedules && managerState.tournaments.length > 1 ? 'I tornei terminano insieme.' : 'Il calendario rientra nell’orario.'}</p>
             </div>}
+            {managerState.tournaments.length > 1 && <section className="point-suggestion" aria-live="polite"><div><strong>Consigliato · allinea la durata di tutti i sotto-tornei</strong>{!allParallelReady ? <p>Completa squadre e formula di tutti i sotto-tornei per confrontare le soluzioni.</p> : pointSearchLoading ? <p>Ricerca delle combinazioni di punti per tutti i sotto-tornei sui campi condivisi…</p> : pointSearch.failed ? <p>Il calcolo dei suggerimenti non è riuscito. Ricarica la pagina per riprovare.</p> : pointSuggestion ? <><p>Scarto tra le fini: {pointSuggestion.gapBefore} → <b>{pointSuggestion.gapAfter} min</b>{pointSuggestion.gapAfter === 0 ? ' · fine comune' : ' · avvicinamento delle durate'}</p><div className="point-balance-table"><table><thead><tr><th>Sotto-torneo</th><th>Punti per set consigliati</th><th>Fine attuale → proposta</th></tr></thead><tbody>{pointSuggestion.finishes.map((finish, index) => {
+              const tournament = managerState.tournaments.find((item) => item.id === finish.tournamentId)!
+              const change = pointSuggestion.changes.find((item) => item.tournamentId === finish.tournamentId)
+              return <tr key={finish.tournamentId}><td>{tournament.label || `Torneo ${index + 1}`}</td><td>{change ? `${change.before.join(' / ')} → ${change.setPoints.join(' / ')}` : `${normalizeSetPoints(tournament.state.config).join(' / ')} · invariati`}</td><td>{formatMinute(finish.before)} → {formatMinute(finish.after)}</td></tr>
+            })}</tbody></table></div><p>Fine complessiva proposta: {formatMinute(pointSuggestion.endMinute)}{pointSuggestion.overtimeMinutes > 0 ? ` · oltre l’ora limite di ${pointSuggestion.overtimeMinutes} min` : ' · entro l’ora limite'}. Numero di set e fasi invariati.</p></> : <p>{!unequalParallelDuration ? 'Le fini stimate sono già allineate.' : 'La ricerca non ha trovato un miglioramento con i punti dei set mantenendo questa struttura. Per avvicinare ulteriormente le durate occorre modificare set o fasi.'}</p>}</div>{pointSuggestion && <button className="button secondary" onClick={applyPointSuggestion}>Applica la combinazione consigliata</button>}</section>}
             <div className="phase-editor-list">
               {phases.map((phase, index) => {
                 const entrants = phaseEntrants[index]
