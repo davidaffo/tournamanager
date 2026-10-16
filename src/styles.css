@@ -290,6 +290,15 @@ main { min-width: 0; }
 .live-court > header span { display: flex; align-items: center; gap: 7px; font-size: 12px; font-weight: 800; }
 .live-court > header b { padding: 5px 8px; border-radius: 20px; color: var(--green); background: var(--mint); font-size: 8px; text-transform: uppercase; }
 .live-court.busy > header b { color: #285b91; background: #e4effb; }
+.live-court.has-suggestion { border-top: 3px solid #d6aa35; }
+.live-court.has-suggestion > header b { color: #805b15; background: #fff2c5; }
+.court-suggestion { margin-top: 12px; padding: 13px; border: 1px solid #d6aa35; border-radius: 10px; background: #fff2c5; }
+.court-suggestion > small { color: var(--ink); font-size: 10px; font-weight: 800; }
+.court-suggestion > p { margin: 4px 0 0; color: var(--muted); font-size: 9px; }
+.court-suggestion .live-matchup { margin: 17px 0; }
+.court-suggestion > .button { width: 100%; }
+:root[data-theme="dark"] .court-suggestion { background: #413616; border-color: #b88c27; }
+:root[data-theme="dark"] .live-court.has-suggestion > header b { color: #f2d98b; background: #413616; }
 .court-category-menu { position: relative; margin-top: 10px; }
 .court-category-menu > summary { display: flex; align-items: center; gap: 7px; min-height: 28px; padding: 5px 8px; border: 1px solid var(--line); border-radius: 8px; color: var(--muted); font-size: 9px; cursor: pointer; list-style: none; }
 .court-category-menu > summary::-webkit-details-marker { display: none; }
@@ -375,6 +384,7 @@ td:nth-child(2) { min-width: 150px; text-align: left; }
 .tournament-column .public-standing .public-title { border-left: 3px solid color-mix(in srgb, var(--tournament-color) 40%, var(--line)); background: color-mix(in srgb, var(--tournament-color) 7%, var(--card)); }
 .tournament-column .standings-embedded { margin-top: 16px; padding-top: 0; border-top: 0; }
 .tournament-column .phase-overview-grid { grid-template-columns: minmax(0, 1fr); }
+.active-tournament-view .phase-overview-grid { grid-template-columns: repeat(auto-fit, minmax(min(100%, 520px), 1fr)); }
 .tournament-column .phase-match-row { grid-template-columns: 36px minmax(0, 1fr) 36px minmax(0, 1fr); gap: 6px; }
 .tournament-column .phase-match-row.completed { grid-template-columns: 36px minmax(0, 1fr) 64px minmax(0, 1fr); }
 .tournament-column .phase-match-row > div > small { display: none; }

@@ -10,7 +10,7 @@ import { NextcloudPublisher } from './NextcloudPublisher'
 import { PublicViewer } from './PublicViewer'
 import { buildPublicSnapshot } from './publicSnapshot'
 import type { PointBalanceSuggestion } from './engine/pointSuggestions'
-import { scrollToTournament, TournamentRows } from './TournamentRows'
+import { TournamentRows } from './TournamentRows'
 import { MatchSetScores } from './MatchSetScores'
 import { ClubColorsProvider, TeamName } from './TeamName'
 import { tournamentColor, tournamentPalette, tournamentTheme } from './tournamentColors'
@@ -1179,14 +1179,16 @@ function ManagerApp() {
       {view === 'structure' && <StructureView config={config} teams={teams} matches={matches} selectedFormat={selectedFormat} phases={phases} tournamentTabs={<TournamentTabs tournaments={managerState.tournaments} activeId={activeWorkspace.id} onSelect={selectTournament} />} onConfigure={() => setView('design')} onStart={() => setView('control')} />}
 
       {view === 'control' && <div className="page control-page">
-        <div className="page-heading"><div><span className="eyebrow live"><i /> Regia condivisa</span><h2>Gestione incontri</h2><p>Tutti i sotto-tornei e tutti i campi in un’unica vista.</p></div><div className="heading-metrics"><Metric value={`${completedMatches}/${totalMatches}`} label="concluse" /><Metric value={playingMatches.length} label="in campo" /></div></div>
+        <div className="page-heading"><div><span className="eyebrow live"><i /> Regia condivisa</span><h2>Gestione incontri</h2><p>Campi condivisi tra tutti i tornei. Seleziona una scheda per vedere classifiche e incontri.</p></div><div className="heading-metrics"><Metric value={`${completedMatches}/${totalMatches}`} label="concluse" /><Metric value={playingMatches.length} label="in campo" /></div></div>
         {managedMatches.length === 0 && <EmptyState icon={Play} title="Crea prima il torneo e il suo calendario" action={() => setView('design')} />}
         {tournamentsWithoutCourts.length > 0 && <p className="structure-warning" role="status">Nessun campo abilitato per: {tournamentsWithoutCourts.map((tournament) => tournament.label).join(', ')}. Abilita la categoria su almeno un campo per avviare le partite.</p>}
           <div className="live-courts">{Array.from({ length: config.courts }, (_, index) => index + 1).map((court) => {
             const activeOnCourt = playingMatches.filter((entry) => entry.match.court === court)
+            const courtSuggestion = activeOnCourt.length === 0 && suggestedMatch?.availableCourt === court ? suggestedMatch : undefined
+            const suggestedTeams = new Map((courtSuggestion?.teams ?? []).map((team) => [team.id, team]))
             const categories = config.courtCategories?.[court] ?? tournamentCategories
-            return <section className={`live-court ${activeOnCourt.length ? 'busy' : ''}`} key={court}>
-              <header><span><MapPin size={17} /> Campo {court}</span><b>{activeOnCourt.length ? `${activeOnCourt.length} in gioco` : 'Libero'}</b></header>
+            return <section className={`live-court ${activeOnCourt.length ? 'busy' : ''} ${courtSuggestion ? 'has-suggestion' : ''}`} key={court}>
+              <header><span><MapPin size={17} /> Campo {court}</span><b>{activeOnCourt.length ? `${activeOnCourt.length} in gioco` : courtSuggestion ? 'Prossima partita' : 'Libero'}</b></header>
               <CourtCategoryMenu options={presentCategories.map((category) => ({ value: category, label: tournamentTypeLabels[category] }))} allowed={categories} onChange={(next) => updateCourtPolicy(court, next)} />
               {activeOnCourt.some((entry) => !categories.includes(entry.config.tournamentType)) && <p className="court-policy-note">Il vincolo vale dai prossimi incontri. Quello in corso può terminare.</p>}
               {activeOnCourt.length ? <div className="live-active-list">{activeOnCourt.map((active) => {
@@ -1195,14 +1197,18 @@ function ManagerApp() {
                   <div className="live-matchup"><ParticipantBadge source={active.match.teamAId} matches={active.matches} teamById={activeTeamById} /><strong>VS</strong><ParticipantBadge source={active.match.teamBId} matches={active.matches} teamById={activeTeamById} /></div>
                   <div className="court-actions"><button className="button secondary" onClick={() => updateMatch(active.tournamentId, active.match.id, { status: 'scheduled' })}>Rimetti in coda</button><button className="button result" onClick={() => setEditingMatch({ tournamentId: active.tournamentId, match: active.match })}><Save size={16} /> Risultato</button></div>
                 </article>
-              })}</div> : <div className="free-court"><Check size={24} /><p>Pronto per la prossima partita</p></div>}
+              })}</div> : courtSuggestion ? <article className="court-suggestion">
+                <small>{courtSuggestion.tournamentLabel}</small>
+                <p>{courtSuggestion.match.phaseName}</p>
+                <div className="live-matchup"><ParticipantBadge source={courtSuggestion.match.teamAId} matches={courtSuggestion.matches} teamById={suggestedTeams} /><strong>VS</strong><ParticipantBadge source={courtSuggestion.match.teamBId} matches={courtSuggestion.matches} teamById={suggestedTeams} /></div>
+                <button className="button primary" onClick={() => startMatch(courtSuggestion.tournamentId, courtSuggestion.match.id)}><Play size={15} /> Avvia partita</button>
+              </article> : <div className="free-court"><Check size={24} /><p>Pronto per la prossima partita</p></div>}
             </section>
           })}</div>
-          <TournamentTabs tournaments={managerState.tournaments} suggestedId={suggestedMatch?.tournamentId} onSelect={(id) => scrollToTournament('live-tournament', id)} />
-        {managedMatches.length > 0 && <TournamentRows tournaments={managerState.tournaments} prefix="live-tournament" headerContent={(_, index) => <><p>Fase attuale: {currentTournamentPhase(managerState.tournaments[index].state)?.name ?? 'Da configurare'}</p></>}>{(_, index) => {
-          const tournament = managerState.tournaments[index]
-          return <LivePhaseOverview matches={tournament.state.matches} teams={tournament.state.teams} phases={tournament.state.phases} readyCourts={new Map(readyMatches.filter((entry) => entry.tournamentId === tournament.id).map((entry) => [entry.match.id, entry.availableCourt as number]))} suggestedMatchId={suggestedMatch?.tournamentId === tournament.id ? suggestedMatch.match.id : undefined} onStart={(match) => startMatch(tournament.id, match.id)} onEdit={(match) => setEditingMatch({ tournamentId: tournament.id, match })} />
-        }}</TournamentRows>}
+          <TournamentTabs tournaments={managerState.tournaments} activeId={activeWorkspace.id} suggestedId={suggestedMatch?.tournamentId} onSelect={selectTournament} />
+        {managedMatches.length > 0 && <div className="active-tournament-view"><TournamentRows tournaments={[{ ...activeWorkspace, color: tournamentColor(activeWorkspace.color, activeTournamentIndex) }]} prefix="live-tournament" headerContent={() => <p>Fase attuale: {currentTournamentPhase(state)?.name ?? 'Da configurare'}</p>}>
+          {() => <LivePhaseOverview key={activeWorkspace.id} matches={matches} teams={teams} phases={phases} readyCourts={new Map(readyMatches.filter((entry) => entry.tournamentId === activeWorkspace.id).map((entry) => [entry.match.id, entry.availableCourt as number]))} suggestedMatchId={suggestedMatch?.tournamentId === activeWorkspace.id ? suggestedMatch.match.id : undefined} onStart={(match) => startMatch(activeWorkspace.id, match.id)} onEdit={(match) => setEditingMatch({ tournamentId: activeWorkspace.id, match })} />}
+        </TournamentRows></div>}
       </div>}
 
       {view === 'publish' && <div className="page publish-page">
