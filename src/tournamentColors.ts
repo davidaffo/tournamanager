@@ -12,13 +12,10 @@ export const tournamentPalette = [
   { name: 'Bianco', color: '#ffffff' },
 ]
 const defaultColors = tournamentPalette.map((entry) => entry.color)
-const previousPalette = ['#6b8799', '#90809c', '#688c80', '#ac896b', '#a17d8d', '#8b946a', '#af7e70', '#7c8890']
 
 export function tournamentColor(value: unknown, index = 0): string {
   if (typeof value !== 'string' || !/^#[\da-f]{6}$/i.test(value)) return defaultColors[index % defaultColors.length]
-  const normalized = value.toLowerCase()
-  const previousIndex = previousPalette.indexOf(normalized)
-  return previousIndex >= 0 ? defaultColors[previousIndex] : normalized
+  return value.toLowerCase()
 }
 
 export function tournamentTheme(value: unknown, index = 0): CSSProperties {

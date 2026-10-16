@@ -2,8 +2,34 @@ import { describe, expect, it } from 'vitest'
 import { buildConfigurationFile, makeEmptyWorkspaces, readConfigurationFile } from './App'
 import { allowedCourts, generateMatches, parseTeams } from './engine/core'
 import type { TournamentPhase, TournamentType } from './engine/types'
+import { tournamentPalette, tournamentTheme } from './tournamentColors'
 
 describe('configuration transfer and fresh tournament', () => {
+  it('keeps every chosen palette color attached to its tournament after export, reorder and import', () => {
+    const blank = makeEmptyWorkspaces().tournaments[0]
+    const tournaments = [...tournamentPalette].reverse().map((entry, index) => ({ ...blank, id: `color-${index}`, label: entry.name, color: entry.color }))
+    const file = buildConfigurationFile(tournaments)
+    expect(file.tournaments.map((entry) => entry.color)).toEqual(tournaments.map((entry) => entry.color))
+    file.tournaments.reverse()
+    const restored = readConfigurationFile(JSON.stringify(file))
+    for (const tournament of restored.tournaments) {
+      const original = tournaments.find((entry) => entry.label === tournament.label)!
+      expect(tournament.color).toBe(original.color)
+      expect(tournamentTheme(tournament.color)).toHaveProperty('--tournament-color', original.color)
+    }
+  })
+
+  it('preserves explicitly saved colors from older palettes instead of replacing them', () => {
+    const blank = makeEmptyWorkspaces().tournaments[0]
+    const colors = ['#6b8799', '#90809c', '#688c80', '#ac896b', '#a17d8d', '#8b946a', '#af7e70', '#7c8890', '#123456']
+    const tournaments = colors.map((color, index) => ({ ...blank, id: `old-${index}`, label: `Torneo ${index}`, color }))
+    const exported = buildConfigurationFile(tournaments)
+    expect(exported.tournaments.map((entry) => entry.color)).toEqual(colors)
+    const restored = readConfigurationFile(JSON.stringify({ ...exported, tournaments: exported.tournaments.map((entry, index) => ({ ...entry, color: colors[index] })) }))
+    expect(restored.tournaments.map((entry) => entry.color)).toEqual(colors)
+    restored.tournaments.forEach((entry) => expect(tournamentTheme(entry.color)).toHaveProperty('--tournament-color', entry.color))
+  })
+
   it('restores court restrictions, colors and phase options through a real JSON export/import', () => {
     const blank = makeEmptyWorkspaces().tournaments[0]
     const policy: Record<number, TournamentType[]> = { 1: ['s3-red'], 2: ['s3-red', 's3-green'], 3: [] }
