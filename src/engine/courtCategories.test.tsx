@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
+import { LivePhaseOverview } from '../App'
 import { CourtCategoryMenu } from '../CourtCategoryMenu'
 import { allowedCourts, canStartOnSharedCourts, ensureParallelSchedules, generateMatches, generateParallelMatches, normalizeCourtCategories, parseTeams } from './core'
 import type { Match, TournamentConfig, TournamentPhase, TournamentType } from './types'
@@ -16,6 +17,26 @@ const verifyNoCourtOverlaps = (matches: Match[]) => matches.forEach((match, inde
 }))
 
 describe('court category restrictions', () => {
+  it('offers a separate start button for every available court', () => {
+    const item = entry('r', 's3-red')
+    const match = generateParallelMatches([item]).r[0]
+    const html = renderToStaticMarkup(<LivePhaseOverview matches={[match]} teams={item.teams} phases={phases} readyCourts={new Map([[match.id, [1, 2]]])} onStart={() => {}} onEdit={() => {}} />)
+    expect(html).toContain('Avvia · Campo 1')
+    expect(html).toContain('Avvia · Campo 2')
+    expect(html).not.toContain('disabled')
+  })
+
+  it('only offers eligible courts and keeps blocked matches waiting', () => {
+    const item = entry('r', 's3-red')
+    const match = generateParallelMatches([item]).r[0]
+    const render = (courts: number[]) => renderToStaticMarkup(<LivePhaseOverview matches={[match]} teams={item.teams} phases={phases} readyCourts={new Map([[match.id, courts]])} onStart={() => {}} onEdit={() => {}} />)
+    expect(render([2])).toContain('Avvia · Campo 2')
+    expect(render([2])).not.toContain('Avvia · Campo 1')
+    expect(render([])).toContain('disabled=""')
+    expect(render([])).toContain('In attesa')
+    expect(render([])).not.toContain('Avvia · Campo')
+  })
+
   it('offers only categories present in the tournament in a closed compact menu', () => {
     const html = renderToStaticMarkup(<CourtCategoryMenu options={[{ value: 's3-red', label: 'S3 Red' }]} allowed={['s3-red', 's3-green', 's3-white', '6v6']} onChange={() => {}} />)
     expect(html).toContain('S3 Red')

@@ -503,8 +503,8 @@ function ManagerApp() {
       liveTeamStats.set(key, { games: (previous?.games ?? 0) + 1, lastEnd: Math.max(previous?.lastEnd ?? toMinute(entry.config.startTime), entry.match.endMinute) })
     })
   })
-  const availableCourtFor = (entry: ManagedMatch) => allowedCourts(entry.config).sort((a, b) => Number(b === entry.match.court) - Number(a === entry.match.court))
-    .find((court) => canStartOnSharedCourts(entry.tournamentId, { ...entry.match, court }, entry.matches, playingMatches, entry.config))
+  const availableCourtsFor = (entry: ManagedMatch) => allowedCourts(entry.config).sort((a, b) => Number(b === entry.match.court) - Number(a === entry.match.court))
+    .filter((court) => canStartOnSharedCourts(entry.tournamentId, { ...entry.match, court }, entry.matches, playingMatches, entry.config))
   const livePriority = (entry: ManagedMatch) => {
     const ids = [resolveParticipantId(entry.match.teamAId, entry.matches), resolveParticipantId(entry.match.teamBId, entry.matches)].filter((id): id is string => Boolean(id))
     const fallback = toMinute(entry.config.startTime)
@@ -517,9 +517,9 @@ function ManagerApp() {
     .map((entry) => {
       const priority = livePriority(entry)
       const phaseProgress = phaseProgressByTournament.get(entry.tournamentId) as { phaseIndex: number; completed: number; total: number }
-      return { ...entry, availableCourt: availableCourtFor(entry), priority, phaseProgress, sortPriority: { phaseIndex: phaseProgress.phaseIndex, completedInPhase: phaseProgress.completed, matchesInPhase: phaseProgress.total, teamGames: priority.games, teamsLastEnd: priority.lastEnd, scheduledStart: entry.match.startMinute } }
+      return { ...entry, availableCourts: availableCourtsFor(entry), priority, phaseProgress, sortPriority: { phaseIndex: phaseProgress.phaseIndex, completedInPhase: phaseProgress.completed, matchesInPhase: phaseProgress.total, teamGames: priority.games, teamsLastEnd: priority.lastEnd, scheduledStart: entry.match.startMinute } }
     })
-    .filter((entry) => entry.availableCourt !== undefined)
+    .filter((entry) => entry.availableCourts.length > 0)
     .sort((a, b) => compareTournamentMatchPriority(a.sortPriority, b.sortPriority))
   const suggestedMatch = readyMatches[0]
   const knownClubs = [...new Set(teams.map((team) => team.club.trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'it'))
@@ -921,7 +921,7 @@ function ManagerApp() {
       state: { ...tournament.state, matches: tournament.state.matches.map((match) => match.id === id ? { ...match, ...patch } : match) },
     } : tournament),
   }))
-  const startMatch = (tournamentId: string, id: string) => setManagerState((current) => {
+  const startMatch = (tournamentId: string, id: string, court: number) => setManagerState((current) => {
     const allMatches: ManagedMatch[] = current.tournaments.flatMap((tournament, index) => tournament.state.matches.map((match) => ({
       tournamentId: tournament.id, tournamentLabel: tournament.label || `Torneo ${index + 1}`, match,
       matches: tournament.state.matches, teams: tournament.state.teams, config: tournament.state.config,
@@ -929,11 +929,9 @@ function ManagerApp() {
     const candidate = allMatches.find((entry) => entry.tournamentId === tournamentId && entry.match.id === id)
     if (!candidate) return current
     const playing = allMatches.filter((entry) => entry.match.status === 'playing')
-    const availableCourt = allowedCourts(candidate.config).sort((a, b) => Number(b === candidate.match.court) - Number(a === candidate.match.court))
-      .find((court) => canStartOnSharedCourts(tournamentId, { ...candidate.match, court }, candidate.matches, playing, candidate.config))
-    if (!availableCourt) return current
+    if (!canStartOnSharedCourts(tournamentId, { ...candidate.match, court }, candidate.matches, playing, candidate.config)) return current
     return { ...current, tournaments: current.tournaments.map((tournament) => tournament.id === tournamentId ? {
-      ...tournament, state: { ...tournament.state, matches: tournament.state.matches.map((match) => match.id === id ? { ...match, court: availableCourt, status: 'playing' } : match) },
+      ...tournament, state: { ...tournament.state, matches: tournament.state.matches.map((match) => match.id === id ? { ...match, court, status: 'playing' } : match) },
     } : tournament) }
   })
   const saveMatchResult = (tournamentId: string, changedMatch: Match, sets: SetScore[]) => {
@@ -1184,7 +1182,7 @@ function ManagerApp() {
         {tournamentsWithoutCourts.length > 0 && <p className="structure-warning" role="status">Nessun campo abilitato per: {tournamentsWithoutCourts.map((tournament) => tournament.label).join(', ')}. Abilita la categoria su almeno un campo per avviare le partite.</p>}
           <div className="live-courts">{Array.from({ length: config.courts }, (_, index) => index + 1).map((court) => {
             const activeOnCourt = playingMatches.filter((entry) => entry.match.court === court)
-            const courtSuggestion = activeOnCourt.length === 0 && suggestedMatch?.availableCourt === court ? suggestedMatch : undefined
+            const courtSuggestion = activeOnCourt.length === 0 && suggestedMatch?.availableCourts.includes(court) ? suggestedMatch : undefined
             const suggestedTeams = new Map((courtSuggestion?.teams ?? []).map((team) => [team.id, team]))
             const categories = config.courtCategories?.[court] ?? tournamentCategories
             return <section className={`live-court ${activeOnCourt.length ? 'busy' : ''} ${courtSuggestion ? 'has-suggestion' : ''}`} key={court}>
@@ -1201,13 +1199,13 @@ function ManagerApp() {
                 <small>{courtSuggestion.tournamentLabel}</small>
                 <p>{courtSuggestion.match.phaseName}</p>
                 <div className="live-matchup"><ParticipantBadge source={courtSuggestion.match.teamAId} matches={courtSuggestion.matches} teamById={suggestedTeams} /><strong>VS</strong><ParticipantBadge source={courtSuggestion.match.teamBId} matches={courtSuggestion.matches} teamById={suggestedTeams} /></div>
-                <button className="button primary" onClick={() => startMatch(courtSuggestion.tournamentId, courtSuggestion.match.id)}><Play size={15} /> Avvia partita</button>
+                <button className="button primary" onClick={() => startMatch(courtSuggestion.tournamentId, courtSuggestion.match.id, court)}><Play size={15} /> Avvia · Campo {court}</button>
               </article> : <div className="free-court"><Check size={24} /><p>Pronto per la prossima partita</p></div>}
             </section>
           })}</div>
           <TournamentTabs tournaments={managerState.tournaments} activeId={activeWorkspace.id} suggestedId={suggestedMatch?.tournamentId} onSelect={selectTournament} />
         {managedMatches.length > 0 && <div className="active-tournament-view"><TournamentRows tournaments={[{ ...activeWorkspace, color: tournamentColor(activeWorkspace.color, activeTournamentIndex) }]} prefix="live-tournament" headerContent={() => <p>Fase attuale: {currentTournamentPhase(state)?.name ?? 'Da configurare'}</p>}>
-          {() => <LivePhaseOverview key={activeWorkspace.id} matches={matches} teams={teams} phases={phases} readyCourts={new Map(readyMatches.filter((entry) => entry.tournamentId === activeWorkspace.id).map((entry) => [entry.match.id, entry.availableCourt as number]))} suggestedMatchId={suggestedMatch?.tournamentId === activeWorkspace.id ? suggestedMatch.match.id : undefined} onStart={(match) => startMatch(activeWorkspace.id, match.id)} onEdit={(match) => setEditingMatch({ tournamentId: activeWorkspace.id, match })} />}
+          {() => <LivePhaseOverview key={activeWorkspace.id} matches={matches} teams={teams} phases={phases} readyCourts={new Map(readyMatches.filter((entry) => entry.tournamentId === activeWorkspace.id).map((entry) => [entry.match.id, entry.availableCourts]))} suggestedMatchId={suggestedMatch?.tournamentId === activeWorkspace.id ? suggestedMatch.match.id : undefined} onStart={(match, court) => startMatch(activeWorkspace.id, match.id, court)} onEdit={(match) => setEditingMatch({ tournamentId: activeWorkspace.id, match })} />}
         </TournamentRows></div>}
       </div>}
 
@@ -1320,7 +1318,7 @@ function StructureView({ config, teams, matches, selectedFormat, phases, tournam
   </div>
 }
 
-function LivePhaseOverview({ matches, teams, phases, readyCourts, suggestedMatchId, onStart, onEdit }: { matches: Match[]; teams: Team[]; phases: TournamentPhase[]; readyCourts: Map<string, number>; suggestedMatchId?: string; onStart: (match: Match) => void; onEdit: (match: Match) => void }) {
+export function LivePhaseOverview({ matches, teams, phases, readyCourts, suggestedMatchId, onStart, onEdit }: { matches: Match[]; teams: Team[]; phases: TournamentPhase[]; readyCourts: Map<string, number[]>; suggestedMatchId?: string; onStart: (match: Match, court: number) => void; onEdit: (match: Match) => void }) {
   const teamById = new Map(teams.map((team) => [team.id, team]))
   const currentPhase = currentTournamentPhase({ phases, matches })
   const phaseMatches = currentPhase ? matches.filter((match) => match.phaseId === currentPhase.id) : []
@@ -1332,14 +1330,14 @@ function LivePhaseOverview({ matches, teams, phases, readyCourts, suggestedMatch
   })) : [...new Set(phaseMatches.map((match) => match.phaseName.split(' · ')[0]))].map((name) => ({ id: name, title: name, matches: phaseMatches.filter((match) => match.phaseName.startsWith(name)) }))
 
   const matchRow = (match: Match) => {
-    const readyCourt = readyCourts.get(match.id)
+    const availableCourts = readyCourts.get(match.id) ?? []
     const suggested = match.id === suggestedMatchId && match.status === 'scheduled'
     return <article className={`phase-match-row ${match.status} ${suggested ? 'suggested' : ''}`} key={match.id}>
       <div><time>{match.court === 0 ? '—' : formatMinute(match.startMinute)}</time><small>{match.phaseName}</small></div>
       <span><TeamName name={participantLabel(match.teamAId, matches, teamById)} club={teamById.get(resolveParticipantId(match.teamAId, matches) ?? '')?.club} /></span>
       {match.status === 'completed' ? <MatchSetScores sets={match.sets} /> : <b>vs</b>}
       <span><TeamName name={participantLabel(match.teamBId, matches, teamById)} club={teamById.get(resolveParticipantId(match.teamBId, matches) ?? '')?.club} /></span>
-      {match.status === 'scheduled' ? <button className={`button ${suggested ? 'primary' : 'secondary'}`} disabled={!readyCourt} onClick={() => onStart(match)}><Play size={13} /> {readyCourt ? `Avvia · C${readyCourt}` : 'In attesa'}</button> : <button className={`button ${match.status === 'playing' ? 'result' : 'secondary'}`} onClick={() => onEdit(match)}>{match.status === 'playing' ? <><Save size={13} /> Risultato</> : 'Modifica'}</button>}
+      {match.status === 'scheduled' ? <div className="match-court-actions" role="group" aria-label="Scegli il campo">{availableCourts.length > 0 ? availableCourts.map((court) => <button key={court} className={`button ${suggested ? 'primary' : 'secondary'}`} onClick={() => onStart(match, court)}><Play size={13} /> Avvia · Campo {court}</button>) : <button className="button secondary" disabled>In attesa</button>}</div> : <button className={`button ${match.status === 'playing' ? 'result' : 'secondary'}`} onClick={() => onEdit(match)}>{match.status === 'playing' ? <><Save size={13} /> Risultato</> : 'Modifica'}</button>}
     </article>
   }
 

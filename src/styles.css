@@ -361,7 +361,9 @@ td:nth-child(2) { min-width: 150px; text-align: left; }
 .phase-match-row > span:nth-of-type(2) { text-align: right; }
 .phase-match-row > b { color: var(--green); font-size: 10px; text-align: center; }
 .phase-match-row .button { min-height: 34px; padding: 7px 9px; font-size: 9px; }
-.phase-match-row .button { grid-column: 5; grid-row: 1; }
+.phase-match-row > .button { grid-column: 5; grid-row: 1; }
+.phase-match-row > .match-court-actions { grid-column: 5; grid-row: 1; display: flex; flex-wrap: wrap; gap: 5px; }
+.match-court-actions .button { flex: 1 1 auto; }
 .match-score { min-width: 0; display: flex; flex-direction: column; align-items: center; gap: 3px; text-align: center; }
 .match-score > b { color: var(--green); font-size: 11px; }
 .match-score .match-set-scores { display: block; color: var(--muted); font-size: 8px; font-weight: 400; line-height: 1.4; white-space: normal; text-align: center; }
@@ -389,7 +391,8 @@ td:nth-child(2) { min-width: 150px; text-align: left; }
 .tournament-column .phase-match-row.completed { grid-template-columns: 36px minmax(0, 1fr) 64px minmax(0, 1fr); }
 .tournament-column .phase-match-row > div > small { display: none; }
 .tournament-column .phase-match-row > span { white-space: normal; overflow-wrap: anywhere; }
-.tournament-column .phase-match-row .button { grid-column: 1 / -1; grid-row: auto; width: 100%; }
+.tournament-column .phase-match-row > .button,
+.tournament-column .phase-match-row > .match-court-actions { grid-column: 1 / -1; grid-row: auto; width: 100%; }
 .tournament-column .phase-standings td { padding-inline: 4px; }
 .tournament-column .phase-standings td:nth-child(2) { min-width: 105px; }
 .tournament-column .team-name { white-space: normal; overflow-wrap: anywhere; }
@@ -618,7 +621,8 @@ td:nth-child(2) { min-width: 150px; text-align: left; }
   .phase-overview-grid { grid-template-columns: 1fr; }
   .phase-match-row { grid-template-columns: 52px minmax(0, 1fr) 30px minmax(0, 1fr); }
   .phase-match-row small { display: none; }
-  .phase-match-row .button { width: 100%; grid-column: 1 / -1; }
+  .phase-match-row > .button,
+  .phase-match-row > .match-court-actions { width: 100%; grid-column: 1 / -1; grid-row: auto; }
   .nextcloud-fields, .public-link { grid-template-columns: 1fr; }
   .publication-qr { align-items: stretch; flex-direction: column; }
   .publication-qr > div { width: min(240px, 100%); height: auto; aspect-ratio: 1; align-self: center; flex-basis: auto; }
