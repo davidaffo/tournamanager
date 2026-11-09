@@ -6,7 +6,7 @@ import type { PublicSnapshot } from './publicSnapshot'
 
 const STORAGE_KEY = 'tournamanager-nextcloud-reader-v1'
 const DEV_LINK_TARGET_KEY = 'tournamanager-dev-link-target'
-const PAGES_URL = 'https://davidaffo.github.io/tournamanager/'
+const PAGES_URL = 'https://tournamanager.davidaffo.com/'
 type StoredSettings = { baseUrl: string; username: string; viewerUsername: string; publication: NextcloudPublication | null }
 
 const loadSettings = (): StoredSettings => {
